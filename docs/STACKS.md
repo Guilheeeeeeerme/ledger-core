@@ -1,77 +1,44 @@
 # Stack variants
 
-ledger-core is the product name. Compose project names are `ledger-core-express-prisma-rabbitmq` (standalone app stack) and `ledger-core-infra` (shared infrastructure). Never rely on the directory name as the Compose project name.
+ledger-core is the product name. Never rely on the directory name as the Compose project name.
 
-This repository ships the **Express Prisma RabbitMQ** stack: Express, Prisma Client, and RabbitMQ. Other variants reuse the same HTTP contract and isolation layout.
+This checkout is the **express-prisma-rabbitmq** stack: Express, Prisma Client, and RabbitMQ. Compose project name: `ledger-core-express-prisma-rabbitmq`.
 
-## Standalone
+## Operator flow
 
-One Compose file runs the app plus PostgreSQL and RabbitMQ:
+Switch to the stack branch you want to test. One Compose project brings the React tester, the HTTP API, and that branch's Postgres plus broker.
 
 ```bash
-docker compose up --build
+git checkout <branch>
+docker compose up --build --force-recreate
 ```
 
-- Project name: `ledger-core-express-prisma-rabbitmq` (`name:` in `docker-compose.yml`)
+Open http://localhost:3000 and exercise the ledger in the React app. Health shows `{ status, stack }` from `GET /api/health`.
+
+When finished:
+
+```bash
+docker compose down -v
+```
+
+Do not run two stack branches at the same time on one host. Every stack binds port `3000`.
+
+## This branch
+
+- Branch: `stack/express-prisma-rabbitmq`
+- Compose name: `ledger-core-express-prisma-rabbitmq`
 - App: http://localhost:3000
-- RabbitMQ management: http://localhost:15672
-- Database URL inside Compose: `postgres://ledger:ledger@postgres:5432/ledger`
-- Queue: `ledger.transfers.express_prisma`
+- RabbitMQ management: http://localhost:15672 (user/password `ledger`)
 - `STACK_NAME=express-prisma-rabbitmq`
+- Queue: `ledger.transfers.express_prisma`
 
-Do not run standalone Compose at the same time as the shared infra file on the same host ports.
+## Other stack branches
 
-## Parallel worktrees
+- `main` — Compose name `ledger-core`
+- `stack/express-sequelize-rabbitmq` — Compose name `ledger-core-express-sequelize-rabbitmq`
+- `stack/nestjs-typeorm-rabbitmq` — Compose name `ledger-core-nestjs-typeorm-rabbitmq`
+- `stack/nestjs-prisma-bullmq` — Compose name `ledger-core-nestjs-prisma-bullmq`
+- `stack/express-prisma-rabbitmq` — Compose name `ledger-core-express-prisma-rabbitmq`
+- `stack/nestjs-prisma-kafka` — Compose name `ledger-core-nestjs-prisma-kafka`
 
-Several git worktrees can run different stacks against one shared broker and database host. Worktree directories live under `~/Projects/ledger-*`.
-
-Start shared infrastructure once:
-
-```bash
-docker compose -f docker-compose.infra.yml up -d
-```
-
-- Project name: `ledger-core-infra`
-- PostgreSQL: localhost:5432 (user/password `ledger`)
-- RabbitMQ: localhost:5672, management localhost:15672
-- Redis: localhost:6379
-- Kafka: localhost:9092
-
-Init creates these databases when the PostgreSQL volume is new (existing names are skipped):
-
-- `ledger_raw`
-- `ledger_sequelize`
-- `ledger_typeorm`
-- `ledger_bullmq`
-- `ledger_express_prisma`
-- `ledger_kafka`
-
-Copy `.env.parallel.example` in each worktree, then `npm start`. Ports, databases, and queues:
-
-| Worktree path | Port | `STACK_NAME` | Database | Queue |
-| --- | --- | --- | --- | --- |
-| `~/Projects/ledger-core` | 3000 | `raw` | `ledger_raw` | `ledger.transfers.raw` |
-| `~/Projects/ledger-sequelize` | 3001 | `sequelize` | `ledger_sequelize` | `ledger.transfers.sequelize` |
-| `~/Projects/ledger-typeorm` | 3002 | `typeorm` | `ledger_typeorm` | `ledger.transfers.typeorm` |
-| `~/Projects/ledger-bullmq` | 3003 | `bullmq` | `ledger_bullmq` | `ledger.transfers.bullmq` |
-| `~/Projects/ledger-express-prisma-rabbitmq` | 3004 | `express-prisma-rabbitmq` | `ledger_express_prisma` | `ledger.transfers.express_prisma` |
-| `~/Projects/ledger-kafka` | 3005 | `kafka` | `ledger_kafka` | `ledger.transfers.kafka` |
-
-App host ports are 3000 through 3005.
-
-Health loop:
-
-```bash
-for port in 3000 3001 3002 3003 3004 3005; do
-  curl -sS "http://localhost:${port}/api/health"
-  echo
-done
-```
-
-`scripts/smoke.sh` checks one `PORT` (default 3000). `scripts/smoke-all.sh` walks 3000-3005.
-
-`stack.manifest.json` records the current worktree identity (`composeName`, `appHostPort`, Compose services).
-
-## Later pull requests
-
-Five draft pull requests will add the remaining stack variants (Sequelize, TypeORM, BullMQ, Prisma, Kafka) without changing this product name or the shared infra Compose name.
+`stack.manifest.json` records the current stack identity (`composeName`, Compose services).

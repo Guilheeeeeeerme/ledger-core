@@ -7,7 +7,7 @@ It focuses on the failure modes that matter in financial systems: atomic balance
 ## Architecture
 
 ```text
-Browser dashboard / HTTP client
+React tester (same origin)
               │
               ▼
       Express HTTP API
@@ -22,7 +22,7 @@ Browser dashboard / HTTP client
 
 The API and consumer do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes. Prisma Client has no native `FOR UPDATE`, so row locks run through `prisma.$queryRaw` inside `prisma.$transaction`.
 
-Stack variants, Compose project names, and parallel worktree isolation are documented in [docs/STACKS.md](docs/STACKS.md).
+Stack variants and the checkout-then-Compose operator flow are documented in [docs/STACKS.md](docs/STACKS.md).
 
 ### Components
 
@@ -31,7 +31,7 @@ Stack variants, Compose project names, and parallel worktree isolation are docum
 - **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.express_prisma`.
 - **Consumer:** maps successful commits to `ack`, permanent domain failures to `failed` plus `ack`, and transient failures to `nack` with requeue.
 - **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
-- **Dashboard:** provides a dependency-free way to submit and observe transfers.
+- **React tester:** Vite app served as static files from the API. Same-origin `/api/...` calls.
 
 For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md).
 
@@ -42,15 +42,16 @@ For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md)
 - Docker Engine with Docker Compose v2
 - Ports `3000` and `15672` available
 
-Start the full stack:
+Start the full stack (API, React tester, Postgres, broker):
 
 ```bash
-docker compose up --build
+git checkout stack/express-prisma-rabbitmq
+docker compose up --build --force-recreate
 ```
 
 Wait until `app`, `postgres`, and `rabbitmq` report healthy, then open:
 
-- Dashboard: http://localhost:3000
+- React tester: http://localhost:3000
 - RabbitMQ Management: http://localhost:15672
 - RabbitMQ username: `ledger`
 - RabbitMQ password: `ledger`
@@ -76,14 +77,15 @@ docker compose down -v
 
 ## Demo flow
 
-1. Open the dashboard.
-2. Select source and destination accounts.
-3. Enter an amount and submit the transfer.
-4. Observe the transaction move from `pending` to `completed` or `failed`.
-5. Confirm both balances and the selected account history update.
-6. Open RabbitMQ Management and inspect the durable `ledger.transfers.express_prisma` queue.
+1. Open the React tester at http://localhost:3000.
+2. Confirm health shows `status: ok` and the current `stack` name.
+3. Select source and destination accounts.
+4. Enter an amount and submit the transfer.
+5. Observe the transaction move from `pending` to `completed` or `failed`.
+6. Confirm both balances and the selected account history update.
+7. Open RabbitMQ Management and inspect the durable `ledger.transfers.express_prisma` queue.
 
-The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
+The tester polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
 ## API reference
 
@@ -251,7 +253,7 @@ The suite covers:
 - idempotent transaction processing;
 - API status codes and response contracts;
 - consumer `ack` and `nack` semantics;
-- dashboard asset delivery;
+- React tester static delivery;
 - Compose and documentation contracts;
 - English-only repository content.
 
@@ -266,19 +268,18 @@ src/domain/validateTransfer.js  Input normalization and domain errors
 src/ledgerService.js           Accounting invariants and database operations
 src/broker.js                  RabbitMQ connection and durable publication
 src/consumer.js                Delivery handling and acknowledgement policy
-src/app.js                     Express routes and static dashboard delivery
+src/app.js                     Express routes and static tester delivery
 src/server.js                  Dependency composition and startup retries
 src/schema.sql                 Constraints, indexes, and idempotent seed
 src/db.js                      Prisma Client and schema bootstrap
-public/                        Framework-free dashboard
+web/                           React + Vite tester (source)
+public/                        Production build of the tester (Docker/`npm run build:web`)
 test/                          Unit and HTTP contract tests
 test/helpers/httpApp.js        HTTP app factory used by API tests
-stack.manifest.json            Current stack identity for isolation
-docker-compose.yml             Local application infrastructure
-docker-compose.infra.yml       Shared PostgreSQL, RabbitMQ, Redis, and Kafka
+stack.manifest.json            Current stack identity
+docker-compose.yml             App, PostgreSQL, and RabbitMQ
 docs/PRD.md                    Product requirements and acceptance criteria
-docs/STACKS.md                 Parallel worktree and stack-variant notes
-scripts/                       Smoke checks for one stack or all ports
+docs/STACKS.md                 Checkout a stack branch and run Compose
 ```
 
 ## Configuration

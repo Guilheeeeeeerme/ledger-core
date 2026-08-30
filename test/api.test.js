@@ -73,13 +73,11 @@ describe('ledger API', () => {
     assert.equal(response.status, 404);
   });
 
-  it('serves the dashboard and its browser script', async () => {
+  it('serves the React tester', async () => {
     const page = await request(app).get('/');
-    const script = await request(app).get('/app.js');
     assert.equal(page.status, 200);
-    assert.match(page.text, /Ledger Flow/);
-    assert.match(page.text, /New transfer/);
-    assert.match(page.text, /Transaction history/);
-    assert.equal(script.status, 200);
+    assert.match(page.text, /<title>ledger-core tester<\/title>/);
+    assert.match(page.text, /id="root"/);
+    assert.match(page.text, /\/assets\//);
   });
 });
