@@ -1,7 +1,8 @@
-const { createApp } = require('../../src/app');
+const { createApp } = require('../../dist/app');
 
-function createHttpApp(deps) {
-  return createApp(deps);
+async function createHttpApp(deps) {
+  const app = await createApp(deps);
+  return app.getHttpServer();
 }
 
 module.exports = { createHttpApp };

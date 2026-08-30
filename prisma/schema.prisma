@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id        String   @id @db.Uuid
+  name      String
+  currency  String   @db.Char(3)
+  balance   BigInt
+  createdAt DateTime @default(now()) @map("created_at")
+
+  sourceTransactions      Transaction[]  @relation("SourceAccount")
+  destinationTransactions Transaction[]  @relation("DestinationAccount")
+  ledgerEntries           LedgerEntry[]
+
+  @@map("accounts")
+}
+
+model Transaction {
+  id                   String    @id @db.Uuid
+  sourceAccountId      String    @map("source_account_id") @db.Uuid
+  destinationAccountId String    @map("destination_account_id") @db.Uuid
+  amount               BigInt
+  currency             String    @db.Char(3)
+  description          String    @default("")
+  status               String
+  errorCode            String?   @map("error_code")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  processedAt          DateTime? @map("processed_at")
+
+  sourceAccount      Account       @relation("SourceAccount", fields: [sourceAccountId], references: [id])
+  destinationAccount Account       @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
+  ledgerEntries      LedgerEntry[]
+
+  @@map("transactions")
+}
+
+model LedgerEntry {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  transactionId String   @map("transaction_id") @db.Uuid
+  accountId     String   @map("account_id") @db.Uuid
+  amount        BigInt
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  account     Account     @relation(fields: [accountId], references: [id])
+
+  @@unique([transactionId, accountId])
+  @@index([accountId, createdAt(sort: Desc)], map: "idx_entries_account_created")
+  @@map("ledger_entries")
+}

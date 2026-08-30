@@ -1,4 +1,4 @@
-name: ledger-core
+name: ledger-core-nestjs-prisma-kafka
 
 services:
   postgres:
@@ -15,17 +15,29 @@ services:
       timeout: 3s
       retries: 15
 
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    environment:
-      RABBITMQ_DEFAULT_USER: ledger
-      RABBITMQ_DEFAULT_PASS: ledger
+  kafka:
+    image: apache/kafka:3.9.0
+    hostname: kafka
     ports:
-      - "15672:15672"
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 3s
-      timeout: 5s
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
       retries: 20
 
   app:
@@ -34,23 +46,23 @@ services:
       # Only dependency download uses host networking; runtime stays on Compose's private network.
       network: host
     environment:
-      PORT: 3000
+      PORT: 3005
       DATABASE_URL: postgres://ledger:ledger@postgres:5432/ledger
-      RABBITMQ_URL: amqp://ledger:ledger@rabbitmq:5672
-      STACK_NAME: raw
-      QUEUE_NAME: ledger.transfers.raw
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ledger.transfers.kafka
+      STACK_NAME: nestjs-prisma-kafka
     ports:
-      - "3000:3000"
+      - "3005:3005"
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3005/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 3s
       timeout: 3s
-      retries: 15
+      retries: 20
 
 volumes:
   postgres_data:

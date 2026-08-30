@@ -3,11 +3,15 @@ FROM node:22-alpine
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY prisma ./prisma
+RUN npm ci
 
+COPY nest-cli.json tsconfig.json ./
 COPY src ./src
 COPY public ./public
 
-EXPOSE 3000
+RUN npx prisma generate && npx nest build
 
-CMD ["node", "src/server.js"]
+EXPOSE 3005
+
+CMD ["node", "dist/main.js"]

@@ -1,6 +1,6 @@
 # Ledger Core
 
-Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through an HTTP API, RabbitMQ, a transactional consumer, and PostgreSQL.
+Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through a NestJS HTTP API, Apache Kafka, a transactional consumer, Prisma, and PostgreSQL.
 
 It focuses on the failure modes that matter in financial systems: atomic balance changes, balanced entries, concurrent spending, duplicate message delivery, permanent domain failures, and transient infrastructure failures.
 
@@ -10,26 +10,26 @@ It focuses on the failure modes that matter in financial systems: atomic balance
 Browser dashboard / HTTP client
               │
               ▼
-      Express HTTP API
+      NestJS HTTP API
               │ persist transaction as pending
               ▼
          PostgreSQL ◄──────────────────────┐
               │                            │ atomic commit
-              │ publish transaction ID     │
+              │ produce transaction ID     │
               ▼                            │
-          RabbitMQ ──► Consumer ──► Ledger service
+          Kafka ──► Consumer ──► Ledger service
 ```
 
-The API and consumer do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
+The API and consumer do not implement accounting rules themselves. Both delegate to `LedgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
 
 Stack variants, Compose project names, and parallel worktree isolation are documented in [docs/STACKS.md](docs/STACKS.md).
 
 ### Components
 
-- **Express API:** accepts transfers and exposes accounts, transaction status, history, and health.
-- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.raw`.
-- **Consumer:** maps successful commits to `ack`, permanent domain failures to `failed` plus `ack`, and transient failures to `nack` with requeue.
-- **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
+- **NestJS API:** accepts transfers and exposes accounts, transaction status, history, and health.
+- **Kafka:** provides durable asynchronous delivery through topic `ledger.transfers.kafka` (consumer group `ledger-kafka`).
+- **Consumer:** maps successful commits to an offset commit, permanent domain failures to `failed` plus offset commit, and transient failures to no offset commit (retry).
+- **Prisma / PostgreSQL:** stores accounts, transactions, and immutable ledger entries. Row locks use `SELECT ... FOR UPDATE` via `$queryRaw` inside `$transaction`.
 - **Dashboard:** provides a dependency-free way to submit and observe transfers.
 
 For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md).
@@ -39,7 +39,7 @@ For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md)
 ### Requirements
 
 - Docker Engine with Docker Compose v2
-- Ports `3000` and `15672` available
+- Ports `3005` and `9092` available
 
 Start the full stack:
 
@@ -47,14 +47,12 @@ Start the full stack:
 docker compose up --build
 ```
 
-Wait until `app`, `postgres`, and `rabbitmq` report healthy, then open:
+Wait until `app`, `postgres`, and `kafka` report healthy, then open:
 
-- Dashboard: http://localhost:3000
-- RabbitMQ Management: http://localhost:15672
-- RabbitMQ username: `ledger`
-- RabbitMQ password: `ledger`
+- Dashboard: http://localhost:3005
+- Kafka broker: localhost:9092
 
-The application applies its idempotent schema and seed during startup. No manual database setup is required.
+The application applies its Prisma schema and seed during startup. No manual database setup is required.
 
 The seed contains:
 
@@ -80,7 +78,7 @@ docker compose down -v
 3. Enter an amount and submit the transfer.
 4. Observe the transaction move from `pending` to `completed` or `failed`.
 5. Confirm both balances and the selected account history update.
-6. Open RabbitMQ Management and inspect the durable `ledger.transfers.raw` queue.
+6. Inspect Kafka topic `ledger.transfers.kafka` on broker `localhost:9092`.
 
 The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
@@ -97,7 +95,7 @@ GET /api/health
 Success response:
 
 ```json
-{ "status": "ok", "stack": "raw" }
+{ "status": "ok", "stack": "nestjs-prisma-kafka" }
 ```
 
 ### List accounts
@@ -131,7 +129,7 @@ Content-Type: application/json
 Example:
 
 ```bash
-curl -X POST http://localhost:3000/api/transactions \
+curl -X POST http://localhost:3005/api/transactions \
   -H 'content-type: application/json' \
   -d '{
     "transactionId":"11111111-1111-4111-8111-111111111111",
@@ -218,17 +216,17 @@ Any error rolls back every step.
 
 ### Concurrency
 
-`SELECT ... FOR UPDATE` prevents two concurrent transfers from spending the same source balance. Sorting account IDs before locking reduces deadlock risk for transfers moving in opposite directions.
+`SELECT ... FOR UPDATE` via Prisma `$queryRaw` prevents two concurrent transfers from spending the same source balance. Sorting account IDs before locking reduces deadlock risk for transfers moving in opposite directions.
 
 ### Idempotency
 
-RabbitMQ provides at-least-once delivery, so duplicate messages are expected. A completed or failed transaction is a no-op when redelivered. The consumer acknowledges only after `processTransfer` returns, which means the database commit has completed.
+Kafka provides at-least-once delivery, so duplicate messages are expected. A completed or failed transaction is a no-op when redelivered. The consumer commits the offset only after `processTransfer` returns, which means the database commit has completed.
 
 ### Failure classification
 
-- Domain errors are permanent for the submitted transaction. The consumer marks it `failed` and acknowledges the message.
-- Unexpected infrastructure errors are considered transient. The consumer rejects the message with requeue enabled.
-- If the process exits after commit but before `ack`, RabbitMQ redelivers the message and transaction status makes processing idempotent.
+- Domain errors are permanent for the submitted transaction. The consumer marks it `failed` and commits the offset.
+- Unexpected infrastructure errors are considered transient. The consumer does not commit the offset, so Kafka redelivers the message.
+- If the process exits after commit but before the offset commit, Kafka redelivers the message and transaction status makes processing idempotent.
 
 ## Testing
 
@@ -248,7 +246,7 @@ The suite covers:
 - database parameter types for balance deltas;
 - idempotent transaction processing;
 - API status codes and response contracts;
-- consumer `ack` and `nack` semantics;
+- consumer offset commit semantics;
 - dashboard asset delivery;
 - Compose and documentation contracts;
 - English-only repository content.
@@ -258,35 +256,39 @@ For an integrated check, start Compose and submit the same `transactionId` twice
 ## Project structure
 
 ```text
-src/domain/validateTransfer.js  Input normalization and domain errors
-src/ledgerService.js           Accounting invariants and database operations
-src/broker.js                  RabbitMQ connection and durable publication
-src/consumer.js                Delivery handling and acknowledgement policy
-src/app.js                     Express routes and static dashboard delivery
-src/server.js                  Dependency composition and startup retries
-src/schema.sql                 Constraints, indexes, and idempotent seed
-public/                        Framework-free dashboard
-test/                          Unit and HTTP contract tests
-test/helpers/httpApp.js        HTTP app factory used by API tests
-stack.manifest.json            Current stack identity for isolation
-docker-compose.yml             Local application infrastructure
-docker-compose.infra.yml       Shared PostgreSQL, RabbitMQ, Redis, and Kafka
-docs/PRD.md                    Product requirements and acceptance criteria
-docs/STACKS.md                 Parallel worktree and stack-variant notes
-scripts/                       Smoke checks for one stack or all ports
+src/domain/validateTransfer.ts  Input normalization and domain errors
+src/ledger/ledger.service.ts     Accounting invariants and Prisma operations
+src/broker/kafka.service.ts      Kafka producer connection and topic setup
+src/consumer/transfer.consumer.ts Offset commit policy for Kafka delivery
+src/ledger/ledger.controller.ts  NestJS routes
+src/app.ts                       HTTP app factory for tests and production
+src/main.ts                      Dependency composition and startup retries
+prisma/schema.prisma             Accounts, transactions, ledger entries, seed IDs
+public/                          Framework-free dashboard
+test/                            Unit and HTTP contract tests
+test/helpers/httpApp.js          Nest getHttpServer factory used by API tests
+stack.manifest.json              Current stack identity for isolation
+docker-compose.yml               Local application infrastructure
+docker-compose.infra.yml         Shared PostgreSQL, RabbitMQ, Redis, and Kafka
+docs/PRD.md                      Product requirements and acceptance criteria
+docs/STACKS.md                   Parallel worktree and stack-variant notes
+scripts/                         Smoke checks for one stack or all ports
 ```
 
 ## Configuration
 
 The container uses these environment variables:
 
-- `PORT`, default `3000`
+- `PORT`, default `3005`
 - `DATABASE_URL`, default `postgres://ledger:ledger@localhost:5432/ledger`
-- `RABBITMQ_URL`, default `amqp://ledger:ledger@localhost:5672`
-- `STACK_NAME`, default `raw`
-- `QUEUE_NAME`, default `ledger.transfers.raw`
+- `KAFKA_BROKERS`, default `localhost:9092`
+- `KAFKA_TOPIC`, default `ledger.transfers.kafka`
+- `KAFKA_GROUP_ID`, default `ledger-kafka`
+- `STACK_NAME`, default `nestjs-prisma-kafka`
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
+
+Parallel worktrees can copy `.env.parallel.example` and run against shared infra on port `3005` with database `ledger_kafka`.
 
 ## Limitations
 
@@ -296,13 +298,13 @@ This is an evaluation-focused MVP, not a production banking system. It intention
 - TLS and secret management;
 - multiple currencies within one transfer or foreign-exchange conversion;
 - reversals, refunds, holds, and available-versus-posted balance distinctions;
-- outbox-based atomicity between PostgreSQL and RabbitMQ publication;
-- dead-letter queues, bounded retry policy, and operational alerting;
+- outbox-based atomicity between PostgreSQL and Kafka publication;
+- dead-letter topics, bounded retry policy, and operational alerting;
 - cursor pagination and archival for large histories;
 - reconciliation jobs and stored-balance drift detection;
 - production-grade observability and audit access controls.
 
-The API persists `pending` before publishing. A broker failure can therefore leave a pending row until the client retries with the same `transactionId`; a production design would use a transactional outbox.
+The API persists `pending` before producing. A broker failure can therefore leave a pending row until the client retries with the same `transactionId`; a production design would use a transactional outbox.
 
 ## License
 
