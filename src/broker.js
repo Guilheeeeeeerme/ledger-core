@@ -22,6 +22,7 @@ async function publishTransfer(transactionId) {
     Buffer.from(JSON.stringify({ transactionId })),
     { persistent: true, contentType: 'application/json' }
   );
+  console.log(`[ledger] publish queue=${QUEUE} id=${transactionId}`);
 }
 
 async function closeBroker() {

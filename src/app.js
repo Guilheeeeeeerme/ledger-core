@@ -48,8 +48,14 @@ function createApp({ ledgerService, publishTransfer, healthCheck }) {
       // Persist pending first: if publish fails, the request can safely retry with the same ID.
       const transaction = await ledgerService.createPendingTransfer(input);
       if (transaction.status === 'pending') await publishTransfer(transaction.id);
+      console.log(`[ledger] POST /api/transactions accepted id=${transaction.id}`);
       response.status(202).json(transaction);
-    } catch (error) { next(error); }
+    } catch (error) {
+      if (error instanceof DomainError) {
+        console.log(`[ledger] POST /api/transactions rejected code=${error.code} id=${request.body?.transactionId || '-'}`);
+      }
+      next(error);
+    }
   });
 
   app.use((error, _request, response, _next) => {
@@ -58,7 +64,7 @@ function createApp({ ledgerService, publishTransfer, healthCheck }) {
         error: { code: error.code, message: error.message }
       });
     }
-    console.error(error);
+    console.error(`[ledger] internal error message=${error.message}`);
     response.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' }
     });
