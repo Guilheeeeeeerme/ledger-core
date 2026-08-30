@@ -31,6 +31,7 @@ Do not run two stack branches at the same time on one host. Every stack binds po
 - Kafka broker: localhost:9092
 - `STACK_NAME=nestjs-prisma-kafka`
 - Topic: `ledger.transfers.kafka`
+- Backlog simulation: `PROCESS_DELAY_MS=5000` (5s) and `PREFETCH=5` so Ready messages can accumulate while you inspect the broker.
 
 ## Other stack branches
 

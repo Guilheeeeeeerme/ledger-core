@@ -13,12 +13,31 @@ export type LedgerConsumerService = {
  * Converts domain and infrastructure outcomes into Kafka offset commit
  * decisions. Commit only after durable processing or permanent failure.
  */
+function processDelayMs() {
+  const parsed = Number(process.env.PROCESS_DELAY_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function prefetchCount() {
+  const parsed = Number(process.env.PREFETCH);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function handleMessage(
   payload: { transactionId?: string } | null | undefined,
   committer: OffsetCommitter,
   ledgerService: LedgerConsumerService
 ) {
   if (!payload) return;
+
+  const delayMs = processDelayMs();
+  if (delayMs > 0) {
+    await sleep(delayMs);
+  }
 
   let transactionId = payload.transactionId;
   console.log(`[ledger] consumer received id=${transactionId || '-'}`);
@@ -57,6 +76,7 @@ export async function startConsumer(
 ) {
   await consumer.run({
     autoCommit: false,
+    partitionsConsumedConcurrently: prefetchCount(),
     eachMessage: async ({ topic, partition, message }) => {
       const payload = message.value
         ? JSON.parse(message.value.toString()) as { transactionId?: string }
