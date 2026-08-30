@@ -11,7 +11,7 @@ async function waitFor<T>(name: string, operation: () => Promise<T>, attempts = 
       return await operation();
     } catch (error) {
       if (attempt === attempts) throw error;
-      console.log(`Waiting for ${name} (${attempt}/${attempts})...`);
+      console.log(`[ledger] waiting for ${name} (${attempt}/${attempts})`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
@@ -19,21 +19,25 @@ async function waitFor<T>(name: string, operation: () => Promise<T>, attempts = 
 }
 
 async function bootstrap() {
+  const port = Number(process.env.PORT || 3000);
+  const stack = process.env.STACK_NAME || 'nestjs-prisma-kafka';
+  console.log(`[ledger] startup stack=${stack} port=${port}`);
   const app = await createProductionApp();
   const prisma = app.get(PrismaService);
   const kafka = app.get(KafkaService);
   const ledgerService = app.get(LedgerService);
 
   await waitFor('PostgreSQL', () => prisma.ensureSchema());
+  console.log('[ledger] db ready');
   await waitFor('Kafka', () => kafka.connectProducer());
 
   const consumer = await waitFor('Kafka consumer', () => kafka.createConsumer());
   // Start consuming without blocking listen.
   void startConsumer(consumer, ledgerService);
+  console.log(`[ledger] consumer started topic=${kafka.topic}`);
 
-  const port = Number(process.env.PORT || 3000);
   await app.listen(port);
-  console.log(`Ledger listening on http://localhost:${port}`);
+  console.log(`[ledger] listening port=${port}`);
 
   const shutdown = async () => {
     await app.close();
@@ -43,6 +47,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((error) => {
-  console.error('Startup failed:', error);
+  console.error(`[ledger] startup failed error=${(error as Error).message}`);
   process.exit(1);
 });

@@ -42,7 +42,11 @@ export class LedgerService {
       transfer.description
     );
 
-    if (inserted.length === 1) return mapTransaction(inserted[0]);
+    if (inserted.length === 1) {
+      const created = mapTransaction(inserted[0]);
+      console.log(`[ledger] persist pending new id=${created.id}`);
+      return created;
+    }
 
     const existing = await this.getTransaction(transfer.transactionId);
     const samePayload = existing
@@ -52,8 +56,10 @@ export class LedgerService {
       && existing.currency === transfer.currency;
 
     if (!samePayload) {
+      console.log(`[ledger] persist pending conflict id=${transfer.transactionId}`);
       throw new DomainError('TRANSACTION_CONFLICT', 'transactionId already has another payload', 409);
     }
+    console.log(`[ledger] persist pending existing id=${existing.id} status=${existing.status}`);
     return existing;
   }
 
@@ -64,17 +70,26 @@ export class LedgerService {
         transactionId
       );
       const transaction = transactionResult[0];
+      console.log(`[ledger] processTransfer lock transaction id=${transactionId}`);
 
-      if (!transaction) throw new DomainError('TRANSACTION_NOT_FOUND', 'transaction not found', 404);
-      if (transaction.status !== 'pending') return mapTransaction(transaction);
+      if (!transaction) {
+        console.log(`[ledger] processTransfer fail code=TRANSACTION_NOT_FOUND id=${transactionId}`);
+        throw new DomainError('TRANSACTION_NOT_FOUND', 'transaction not found', 404);
+      }
+      if (transaction.status !== 'pending') {
+        console.log(`[ledger] processTransfer skip not pending id=${transaction.id} status=${transaction.status}`);
+        return mapTransaction(transaction);
+      }
 
       const accountIds = [transaction.source_account_id, transaction.destination_account_id].sort();
+      console.log(`[ledger] processTransfer lock accounts source=${transaction.source_account_id} dest=${transaction.destination_account_id}`);
       const accountResult = await tx.$queryRawUnsafe<AccountRow[]>(
         'SELECT id, currency, balance FROM accounts WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE',
         accountIds
       );
 
       if (accountResult.length !== 2) {
+        console.log(`[ledger] processTransfer fail code=ACCOUNT_NOT_FOUND id=${transaction.id}`);
         throw new DomainError('ACCOUNT_NOT_FOUND', 'source or destination account not found', 404);
       }
 
@@ -85,9 +100,11 @@ export class LedgerService {
 
       if (source.currency.trim() !== transaction.currency.trim()
         || destination.currency.trim() !== transaction.currency.trim()) {
+        console.log(`[ledger] processTransfer fail code=CURRENCY_MISMATCH id=${transaction.id}`);
         throw new DomainError('CURRENCY_MISMATCH', 'accounts must use the transaction currency', 409);
       }
       if (Number(source.balance) < amount) {
+        console.log(`[ledger] processTransfer fail code=INSUFFICIENT_FUNDS id=${transaction.id}`);
         throw new DomainError('INSUFFICIENT_FUNDS', 'source account has insufficient funds', 409);
       }
 
@@ -100,6 +117,7 @@ export class LedgerService {
         destination.id,
         amount
       );
+      console.log(`[ledger] processTransfer write entries id=${transaction.id}`);
       await tx.$executeRawUnsafe(
         `UPDATE accounts
          SET balance = balance + CASE WHEN id = $1::uuid THEN $3::bigint ELSE $4::bigint END
@@ -109,12 +127,14 @@ export class LedgerService {
         -amount,
         amount
       );
+      console.log(`[ledger] processTransfer balances updated id=${transaction.id}`);
       const completed = await tx.$queryRawUnsafe<TransactionRow[]>(
         `UPDATE transactions
          SET status = 'completed', processed_at = NOW(), error_code = NULL
          WHERE id = $1::uuid RETURNING *`,
         transaction.id
       );
+      console.log(`[ledger] processTransfer completed id=${transaction.id}`);
       return mapTransaction(completed[0]);
     }, {
       isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted

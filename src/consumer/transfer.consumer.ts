@@ -21,19 +21,22 @@ export async function handleMessage(
   if (!payload) return;
 
   let transactionId = payload.transactionId;
+  console.log(`[ledger] consumer received id=${transactionId || '-'}`);
   try {
     if (!transactionId) throw new Error('missing transactionId');
     await ledgerService.processTransfer(transactionId);
+    console.log(`[ledger] kafka offset commit id=${transactionId}`);
     await committer.commit();
   } catch (error) {
     if (error instanceof DomainError) {
+      console.error(`[ledger] domain fail code=${error.code} id=${transactionId || '-'} markFailed commit`);
       if (transactionId && ledgerService.markFailed) {
         await ledgerService.markFailed(transactionId, error.code);
       }
       await committer.commit();
       return;
     }
-    console.error('Transient consumer error:', (error as Error).message);
+    console.error(`[ledger] transient fail no-commit id=${transactionId || '-'} error=${(error as Error).message}`);
     // Do not commit: KafkaJS will retry the same offset.
   }
 }

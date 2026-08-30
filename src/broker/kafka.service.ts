@@ -38,6 +38,7 @@ export class KafkaService implements OnModuleDestroy {
     });
     this.producer = this.kafka.producer();
     await this.producer.connect();
+    console.log('[ledger] broker ready');
     return this.producer;
   }
 
@@ -50,6 +51,7 @@ export class KafkaService implements OnModuleDestroy {
         value: JSON.stringify({ transactionId })
       }]
     });
+    console.log(`[ledger] publish topic=${TOPIC} id=${transactionId}`);
   }
 
   async createConsumer() {

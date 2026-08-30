@@ -56,6 +56,7 @@ export class LedgerController {
     };
     const transaction = await this.ledgerService.createPendingTransfer(input);
     if (transaction.status === 'pending') await this.publishTransfer(transaction.id);
+    console.log(`[ledger] POST /api/transactions accepted id=${transaction.id}`);
     return transaction;
   }
 }
