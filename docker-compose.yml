@@ -46,20 +46,20 @@ services:
       # Only dependency download uses host networking; runtime stays on Compose's private network.
       network: host
     environment:
-      PORT: 3005
+      PORT: 3000
       DATABASE_URL: postgres://ledger:ledger@postgres:5432/ledger
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: ledger.transfers.kafka
       STACK_NAME: nestjs-prisma-kafka
     ports:
-      - "3005:3005"
+      - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3005/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 3s
       timeout: 3s
       retries: 20

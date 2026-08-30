@@ -31,7 +31,7 @@ async function bootstrap() {
   // Start consuming without blocking listen.
   void startConsumer(consumer, ledgerService);
 
-  const port = Number(process.env.PORT || 3005);
+  const port = Number(process.env.PORT || 3000);
   await app.listen(port);
   console.log(`Ledger listening on http://localhost:${port}`);
 
