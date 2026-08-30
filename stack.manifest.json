@@ -1,9 +1,9 @@
 {
-  "name": "raw",
+  "name": "express-sequelize-rabbitmq",
   "http": "express",
-  "orm": "pg",
+  "orm": "sequelize",
   "broker": "rabbitmq",
-  "composeName": "ledger-core",
-  "appHostPort": 3000,
+  "composeName": "ledger-core-express-sequelize-rabbitmq",
+  "appHostPort": 3001,
   "composeServices": ["app", "postgres", "rabbitmq"]
 }

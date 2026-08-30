@@ -11,7 +11,10 @@ function createApp({ ledgerService, publishTransfer, healthCheck }) {
   app.get('/api/health', async (_request, response, next) => {
     try {
       await healthCheck();
-      response.json({ status: 'ok', stack: process.env.STACK_NAME || 'raw' });
+      response.json({
+        status: 'ok',
+        stack: process.env.STACK_NAME || 'express-sequelize-rabbitmq'
+      });
     } catch (error) {
       next(error);
     }

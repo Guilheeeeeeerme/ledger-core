@@ -1,4 +1,4 @@
-name: ledger-core
+name: ledger-core-express-sequelize-rabbitmq
 
 services:
   postgres:
@@ -37,8 +37,8 @@ services:
       PORT: 3000
       DATABASE_URL: postgres://ledger:ledger@postgres:5432/ledger
       RABBITMQ_URL: amqp://ledger:ledger@rabbitmq:5672
-      STACK_NAME: raw
-      QUEUE_NAME: ledger.transfers.raw
+      STACK_NAME: express-sequelize-rabbitmq
+      QUEUE_NAME: ledger.transfers.sequelize
     ports:
       - "3000:3000"
     depends_on:

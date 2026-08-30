@@ -1,6 +1,6 @@
 const amqp = require('amqplib');
 
-const QUEUE = process.env.QUEUE_NAME || 'ledger.transfers.raw';
+const QUEUE = process.env.QUEUE_NAME || 'ledger.transfers.sequelize';
 let connection;
 let channel;
 

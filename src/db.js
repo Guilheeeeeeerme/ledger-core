@@ -1,30 +1,44 @@
-const { Pool } = require('pg');
+const { Sequelize } = require('sequelize');
+const { initModels, seedAccounts } = require('./models');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgres://ledger:ledger@localhost:5432/ledger'
-});
+const sequelize = new Sequelize(
+  process.env.DATABASE_URL || 'postgres://ledger:ledger@localhost:5432/ledger',
+  {
+    logging: false,
+    dialect: 'postgres'
+  }
+);
 
-async function query(text, params) {
-  return pool.query(text, params);
+const { Account, Transaction, LedgerEntry } = initModels(sequelize);
+
+async function withTransaction(callback) {
+  return sequelize.transaction(callback);
+}
+
+async function healthCheck() {
+  await sequelize.authenticate();
 }
 
 /**
- * Runs a unit of work on one checked-out connection and guarantees that no
- * partial database state survives a thrown error.
+ * Creates tables from model definitions (mirrors schema.sql constraints where
+ * Sequelize can express them) and seeds the fixed demo accounts idempotently.
  */
-async function withTransaction(callback) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+async function prepareDatabase() {
+  await sequelize.sync();
+  await seedAccounts(Account);
 }
 
-module.exports = { pool, query, withTransaction };
+async function close() {
+  await sequelize.close();
+}
+
+module.exports = {
+  sequelize,
+  Account,
+  Transaction,
+  LedgerEntry,
+  withTransaction,
+  healthCheck,
+  prepareDatabase,
+  close
+};

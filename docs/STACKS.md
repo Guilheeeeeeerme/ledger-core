@@ -1,8 +1,8 @@
 # Stack variants
 
-ledger-core is the product name. Compose project names are `ledger-core` (standalone app stack) and `ledger-core-infra` (shared infrastructure). Never rely on the directory name as the Compose project name.
+ledger-core is the product name. Compose project names are `ledger-core-express-sequelize-rabbitmq` (standalone app stack in this worktree) and `ledger-core-infra` (shared infrastructure). Never rely on the directory name as the Compose project name.
 
-This repository ships the **raw** stack: Express, `pg`, and RabbitMQ. Later variants reuse the same HTTP contract and isolation layout.
+This repository ships the **express-sequelize-rabbitmq** stack: Express, Sequelize, and RabbitMQ. Other variants reuse the same HTTP contract and isolation layout.
 
 ## Standalone
 
@@ -12,12 +12,12 @@ One Compose file runs the app plus PostgreSQL and RabbitMQ:
 docker compose up --build
 ```
 
-- Project name: `ledger-core` (`name:` in `docker-compose.yml`)
+- Project name: `ledger-core-express-sequelize-rabbitmq` (`name:` in `docker-compose.yml`)
 - App: http://localhost:3000
 - RabbitMQ management: http://localhost:15672
 - Database URL inside Compose: `postgres://ledger:ledger@postgres:5432/ledger`
-- Queue: `ledger.transfers.raw`
-- `STACK_NAME=raw`
+- Queue: `ledger.transfers.sequelize`
+- `STACK_NAME=express-sequelize-rabbitmq`
 
 Do not run standalone Compose at the same time as the shared infra file on the same host ports.
 
@@ -51,7 +51,7 @@ Copy `.env.parallel.example` in each worktree, then `npm start`. Ports, database
 | Worktree path | Port | `STACK_NAME` | Database | Queue |
 | --- | --- | --- | --- | --- |
 | `~/Projects/ledger-core` | 3000 | `raw` | `ledger_raw` | `ledger.transfers.raw` |
-| `~/Projects/ledger-sequelize` | 3001 | `sequelize` | `ledger_sequelize` | `ledger.transfers.sequelize` |
+| `~/Projects/ledger-express-sequelize-rabbitmq` | 3001 | `express-sequelize-rabbitmq` | `ledger_sequelize` | `ledger.transfers.sequelize` |
 | `~/Projects/ledger-typeorm` | 3002 | `typeorm` | `ledger_typeorm` | `ledger.transfers.typeorm` |
 | `~/Projects/ledger-bullmq` | 3003 | `bullmq` | `ledger_bullmq` | `ledger.transfers.bullmq` |
 | `~/Projects/ledger-express-prisma` | 3004 | `express-prisma` | `ledger_express_prisma` | `ledger.transfers.express-prisma` |
