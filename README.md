@@ -291,6 +291,8 @@ The container uses these environment variables:
 - `RABBITMQ_URL`, default `amqp://ledger:ledger@localhost:5672`
 - `STACK_NAME`, default `nestjs-typeorm-rabbitmq`
 - `QUEUE_NAME`, default `ledger.transfers.typeorm`
+- `PROCESS_DELAY_MS`, default `0` in code; Compose and `.env.parallel.example` set `5000` (5s) so the queue can accumulate Ready messages
+- `PREFETCH`, default `5` (max unacked messages per consumer)
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
 
