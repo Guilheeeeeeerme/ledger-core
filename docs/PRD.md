@@ -24,7 +24,7 @@ docker compose up --build
 - NestJS HTTP API with Prisma.
 - PostgreSQL persistence.
 - Redis and BullMQ asynchronous delivery.
-- Framework-free browser dashboard.
+- React tester (Vite) served as static files by the API.
 - BRL seed accounts and integer minor-unit amounts.
 - Double-entry transfer processing.
 - Database locks and atomic balance updates.
@@ -46,7 +46,7 @@ docker compose up --build
 ## 4. Primary user flow
 
 1. The user opens `http://localhost:3000`.
-2. The dashboard retrieves seeded accounts and current balances.
+2. The React tester retrieves seeded accounts and current balances.
 3. The user selects source and destination accounts, enters a BRL amount, and submits.
 4. The API validates the request, persists a `pending` transaction, and enqueues its ID on BullMQ.
 5. The worker receives the transaction ID and starts a PostgreSQL transaction.
@@ -54,7 +54,7 @@ docker compose up --build
 7. The ledger service validates account existence, matching currency, and available funds.
 8. It inserts equal and opposite entries, updates both balances, and marks the transaction `completed` in one commit.
 9. The worker completes the BullMQ job only after that commit.
-10. The dashboard polls transaction status and refreshes balances and history.
+10. The tester polls transaction status and refreshes balances and history.
 
 ## 5. Functional requirements
 
@@ -199,31 +199,31 @@ Unexpected server failures return `500` with `INTERNAL_ERROR` and do not expose 
 
 ## 11. User experience
 
-The dashboard must show:
+The tester must show:
 
-- application health;
-- current account cards and balances;
+- application health and stack name from `GET /api/health`;
+- current accounts and balances;
 - source and destination selectors;
-- amount and description inputs;
-- the API → Redis/BullMQ → Worker → PostgreSQL path;
-- asynchronous transaction status;
-- signed account history.
+- amount (BRL) and description inputs;
+- asynchronous transaction status until completed or failed;
+- signed account history;
+- a refresh action.
 
-The dashboard uses BRL presentation because the seed and MVP flow use BRL.
+The tester uses BRL presentation because the seed and MVP flow use BRL.
 
 ## 12. Acceptance criteria
 
-1. `docker compose up --build` starts the complete system without manual database setup.
+1. `docker compose up --build --force-recreate` starts the complete system without manual database setup.
 2. PostgreSQL, Redis, and the application become healthy.
-3. Two English-named BRL seed accounts appear in the dashboard.
+3. Two English-named BRL seed accounts appear in the React tester.
 4. A valid transfer returns `pending`, later becomes `completed`, changes both balances once, and creates exactly two entries whose sum is zero.
 5. Insufficient funds produces `failed` without entries or balance changes.
 6. Reprocessing the same transaction ID does not duplicate entries or balance mutations.
 7. Opposite or concurrent transfers lock accounts in deterministic order.
-8. API, worker, dashboard, and deployment contracts have automated tests.
+8. API, worker, tester, and deployment contracts have automated tests.
 9. All repository code, comments, UI copy, and documentation are English.
 10. README documents architecture, operation, API, reliability, tests, structure, limitations, and license.
 
 ## 13. Success metric
 
-An evaluator can clone the repository, start it with one command, complete a transfer in the dashboard, inspect Redis/BullMQ processing, query PostgreSQL-backed results, and understand the consistency model without reading every source file.
+An evaluator can clone the repository, start it with one command, complete a transfer in the React tester, inspect Redis/BullMQ processing, query PostgreSQL-backed results, and understand the consistency model without reading every source file.

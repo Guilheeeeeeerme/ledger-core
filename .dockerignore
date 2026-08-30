@@ -1,4 +1,7 @@
 node_modules
+web/node_modules
+public
+dist
 npm-debug.log
 .git
 .env

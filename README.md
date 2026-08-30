@@ -4,12 +4,12 @@ Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete
 
 It focuses on the failure modes that matter in financial systems: atomic balance changes, balanced entries, concurrent spending, duplicate job delivery, permanent domain failures, and transient infrastructure failures.
 
-This worktree is the NestJS + Prisma + BullMQ stack. The dashboard still polls transaction status; it does not subscribe to Redis.
+This worktree is the NestJS + Prisma + BullMQ stack. The React tester still polls transaction status; it does not subscribe to Redis.
 
 ## Architecture
 
 ```text
-Browser dashboard / HTTP client
+React tester (same origin)
               │
               ▼
       NestJS HTTP API
@@ -26,7 +26,7 @@ The API and worker do not implement accounting rules themselves. Both delegate t
 
 Prisma has no native `FOR UPDATE`. The ledger service runs `SELECT ... FOR UPDATE` through `$queryRaw` inside `$transaction`, locking the transaction row and then both accounts `ORDER BY id`.
 
-Stack variants, Compose project names, and parallel worktree isolation are documented in [docs/STACKS.md](docs/STACKS.md).
+Stack variants and the checkout-then-Compose operator flow are documented in [docs/STACKS.md](docs/STACKS.md).
 
 ### Components
 
@@ -35,7 +35,7 @@ Stack variants, Compose project names, and parallel worktree isolation are docum
 - **Redis / BullMQ:** durable asynchronous jobs on `ledger.bullmq`.
 - **Worker:** after `processTransfer` commits, the job completes. A `DomainError` marks the transfer `failed` and completes the job without retry. Any other thrown error is retried by BullMQ.
 - **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
-- **Dashboard:** provides a dependency-free way to submit and observe transfers by polling.
+- **React tester:** Vite app served as static files from the API. Same-origin `/api/...` calls.
 
 For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md).
 
@@ -46,15 +46,16 @@ For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md)
 - Docker Engine with Docker Compose v2
 - Ports `3000` and `6379` available
 
-Start the full stack:
+Start the full stack (API, React tester, Postgres, broker):
 
 ```bash
-docker compose up --build
+git checkout stack/nestjs-prisma-bullmq
+docker compose up --build --force-recreate
 ```
 
 Wait until `app`, `postgres`, and `redis` report healthy, then open:
 
-- Dashboard: http://localhost:3000
+- React tester: http://localhost:3000
 - Redis: localhost:6379
 
 The application applies its idempotent schema and seed during startup. No manual database setup is required.
@@ -78,13 +79,14 @@ docker compose down -v
 
 ## Demo flow
 
-1. Open the dashboard.
-2. Select source and destination accounts.
-3. Enter an amount and submit the transfer.
-4. Observe the transaction move from `pending` to `completed` or `failed`.
-5. Confirm both balances and the selected account history update.
+1. Open the React tester at http://localhost:3000.
+2. Confirm health shows `status: ok` and the current `stack` name.
+3. Select source and destination accounts.
+4. Enter an amount and submit the transfer.
+5. Observe the transaction move from `pending` to `completed` or `failed`.
+6. Confirm both balances and the selected account history update.
 
-The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
+The tester polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
 ## API reference
 
@@ -251,7 +253,7 @@ The suite covers:
 - idempotent transaction processing;
 - API status codes and response contracts;
 - BullMQ complete-versus-retry semantics;
-- dashboard asset delivery;
+- React tester static delivery;
 - Compose and documentation contracts;
 - English-only repository content.
 
@@ -264,19 +266,18 @@ src/domain/validateTransfer.ts Input normalization and domain errors
 src/ledgerService.ts           Accounting invariants and Prisma operations
 src/broker.ts                  BullMQ queue, Redis connection, and worker start
 src/consumer.ts                Job processing and retry policy
-src/app.ts                     NestJS routes and static dashboard delivery
+src/app.ts                     NestJS routes and static tester delivery
 src/main.ts                    Dependency composition and startup retries
 src/schema.sql                 Constraints, indexes, and idempotent seed
 prisma/schema.prisma           Prisma models matching schema.sql
-public/                        Framework-free dashboard
+web/                           React + Vite tester (source)
+public/                        Production build of the tester (Docker/`npm run build:web`)
 test/                          Unit and HTTP contract tests
 test/helpers/httpApp.js        HTTP app factory used by API tests
-stack.manifest.json            Current stack identity for isolation
-docker-compose.yml             Local application infrastructure
-docker-compose.infra.yml       Shared PostgreSQL, RabbitMQ, Redis, and Kafka
+stack.manifest.json            Current stack identity
+docker-compose.yml             App, PostgreSQL, and Redis
 docs/PRD.md                    Product requirements and acceptance criteria
-docs/STACKS.md                 Parallel worktree and stack-variant notes
-scripts/                       Smoke checks for one stack or all ports
+docs/STACKS.md                 Checkout a stack branch and run Compose
 ```
 
 ## Configuration
@@ -290,8 +291,6 @@ The container uses these environment variables:
 - `QUEUE_NAME` or `BULLMQ_QUEUE`, default `ledger.bullmq`
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
-
-Parallel worktrees copy `.env.parallel.example` (`PORT=3003`, database `ledger_bullmq`) and share Redis on localhost:6379. See [docs/STACKS.md](docs/STACKS.md).
 
 ## Limitations
 
