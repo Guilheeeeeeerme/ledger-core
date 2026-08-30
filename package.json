@@ -2,7 +2,7 @@
   "name": "ledger-core",
   "version": "1.0.0",
   "private": true,
-  "description": "Double-entry ledger MVP with Express, Sequelize, RabbitMQ, PostgreSQL, and an observable dashboard",
+  "description": "Double-entry ledger MVP with Express, Sequelize, RabbitMQ, PostgreSQL, and a React tester",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -12,7 +12,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test"
+    "build:web": "npm --prefix web ci && npm --prefix web run build",
+    "test": "npm run build:web && node --test"
   },
   "engines": {
     "node": ">=22"
