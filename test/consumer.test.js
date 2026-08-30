@@ -1,4 +1,4 @@
-const { describe, it } = require('node:test');
+const { describe, it, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { processTransferJob } = require('../src/consumer');
@@ -33,5 +33,77 @@ describe('processTransferJob', () => {
       }),
       { message: 'connection lost' }
     );
+  });
+});
+
+describe('processTransferJob delay', () => {
+  const savedDelay = process.env.PROCESS_DELAY_MS;
+
+  afterEach(() => {
+    mock.timers.reset();
+    if (savedDelay === undefined) delete process.env.PROCESS_DELAY_MS;
+    else process.env.PROCESS_DELAY_MS = savedDelay;
+  });
+
+  it('waits PROCESS_DELAY_MS before processTransfer when delay is positive', async () => {
+    process.env.PROCESS_DELAY_MS = '1000';
+    mock.timers.enable({ apis: ['setTimeout'] });
+
+    const events = [];
+    const done = processTransferJob(job, {
+      async processTransfer() { events.push('commit'); }
+    });
+
+    assert.deepEqual(events, []);
+    mock.timers.tick(999);
+    assert.deepEqual(events, []);
+    mock.timers.tick(1);
+    await done;
+    assert.deepEqual(events, ['commit']);
+  });
+
+  it('does not wait when PROCESS_DELAY_MS is 0 or unset', async () => {
+    process.env.PROCESS_DELAY_MS = '0';
+    const events = [];
+    const start = Date.now();
+    await processTransferJob(job, {
+      async processTransfer() { events.push('commit'); }
+    });
+    assert.ok(Date.now() - start < 50, 'expected no meaningful wait');
+    assert.deepEqual(events, ['commit']);
+  });
+
+  it('applies delay before domain and transient failure paths', async () => {
+    process.env.PROCESS_DELAY_MS = '500';
+    mock.timers.enable({ apis: ['setTimeout'] });
+
+    let domainReached = false;
+    const domainEvents = [];
+    const domainDone = processTransferJob(job, {
+      async processTransfer() {
+        domainReached = true;
+        throw new DomainError('INSUFFICIENT_FUNDS', 'insufficient funds', 409);
+      },
+      async markFailed(_id, code) { domainEvents.push(`failed:${code}`); }
+    });
+    assert.equal(domainReached, false);
+    mock.timers.tick(499);
+    assert.equal(domainReached, false);
+    mock.timers.tick(1);
+    await domainDone;
+    assert.equal(domainReached, true);
+    assert.deepEqual(domainEvents, ['failed:INSUFFICIENT_FUNDS']);
+
+    let transientReached = false;
+    const transientDone = processTransferJob(job, {
+      async processTransfer() {
+        transientReached = true;
+        throw new Error('connection lost');
+      }
+    });
+    assert.equal(transientReached, false);
+    mock.timers.tick(500);
+    await assert.rejects(transientDone, { message: 'connection lost' });
+    assert.equal(transientReached, true);
   });
 });

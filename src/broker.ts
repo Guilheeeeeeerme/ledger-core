@@ -5,6 +5,11 @@ import type { LedgerService } from './ledgerService';
 
 const QUEUE = process.env.QUEUE_NAME || process.env.BULLMQ_QUEUE || 'ledger.bullmq';
 
+function prefetchCount() {
+  const parsed = Number(process.env.PREFETCH);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+}
+
 function redisConnection() {
   const url = process.env.REDIS_URL || 'redis://localhost:6379';
   return new IORedis(url, { maxRetriesPerRequest: null });
@@ -33,7 +38,7 @@ function createBroker(ledgerService: LedgerService) {
     worker = new Worker(
       QUEUE,
       (job) => processTransferJob(job, ledgerService),
-      { connection: workerConnection, concurrency: 5 }
+      { connection: workerConnection, concurrency: prefetchCount() }
     );
     await queue.waitUntilReady();
     await worker.waitUntilReady();
