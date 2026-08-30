@@ -1,8 +1,6 @@
 # Stack variants
 
-ledger-core is the product name. Compose project names are `ledger-core` (standalone app stack) and `ledger-core-infra` (shared infrastructure). Never rely on the directory name as the Compose project name.
-
-This repository ships the **raw** stack: Express, `pg`, and RabbitMQ. Later variants reuse the same HTTP contract and isolation layout.
+ledger-core is the product name. This worktree ships the **nestjs-typeorm-rabbitmq** stack. Compose project names are `ledger-core-nestjs-typeorm-rabbitmq` (standalone app stack) and `ledger-core-infra` (shared infrastructure). Never rely on the directory name as the Compose project name.
 
 ## Standalone
 
@@ -12,12 +10,12 @@ One Compose file runs the app plus PostgreSQL and RabbitMQ:
 docker compose up --build
 ```
 
-- Project name: `ledger-core` (`name:` in `docker-compose.yml`)
+- Project name: `ledger-core-nestjs-typeorm-rabbitmq` (`name:` in `docker-compose.yml`)
 - App: http://localhost:3000
 - RabbitMQ management: http://localhost:15672
 - Database URL inside Compose: `postgres://ledger:ledger@postgres:5432/ledger`
-- Queue: `ledger.transfers.raw`
-- `STACK_NAME=raw`
+- Queue: `ledger.transfers.typeorm`
+- `STACK_NAME=nestjs-typeorm-rabbitmq`
 
 Do not run standalone Compose at the same time as the shared infra file on the same host ports.
 
@@ -46,32 +44,12 @@ Init creates these databases when the PostgreSQL volume is new (existing names a
 - `ledger_express_prisma`
 - `ledger_kafka`
 
-Copy `.env.parallel.example` in each worktree, then `npm start`. Ports, databases, and queues:
+Copy `.env.parallel.example` in this worktree, then `npm run build && npm start`. This stack uses:
 
 | Worktree path | Port | `STACK_NAME` | Database | Queue |
 | --- | --- | --- | --- | --- |
-| `~/Projects/ledger-core` | 3000 | `raw` | `ledger_raw` | `ledger.transfers.raw` |
-| `~/Projects/ledger-sequelize` | 3001 | `sequelize` | `ledger_sequelize` | `ledger.transfers.sequelize` |
-| `~/Projects/ledger-typeorm` | 3002 | `typeorm` | `ledger_typeorm` | `ledger.transfers.typeorm` |
-| `~/Projects/ledger-bullmq` | 3003 | `bullmq` | `ledger_bullmq` | `ledger.transfers.bullmq` |
-| `~/Projects/ledger-express-prisma` | 3004 | `express-prisma` | `ledger_express_prisma` | `ledger.transfers.express-prisma` |
-| `~/Projects/ledger-kafka` | 3005 | `kafka` | `ledger_kafka` | `ledger.transfers.kafka` |
-
-App host ports are 3000 through 3005.
-
-Health loop:
-
-```bash
-for port in 3000 3001 3002 3003 3004 3005; do
-  curl -sS "http://localhost:${port}/api/health"
-  echo
-done
-```
+| `~/Projects/ledger-nestjs-typeorm-rabbitmq` | 3002 | `nestjs-typeorm-rabbitmq` | `ledger_typeorm` | `ledger.transfers.typeorm` |
 
 `scripts/smoke.sh` checks one `PORT` (default 3000). `scripts/smoke-all.sh` walks 3000-3005.
 
 `stack.manifest.json` records the current worktree identity (`composeName`, `appHostPort`, Compose services).
-
-## Later pull requests
-
-Five draft pull requests will add the remaining stack variants (Sequelize, TypeORM, BullMQ, Prisma, Kafka) without changing this product name or the shared infra Compose name.

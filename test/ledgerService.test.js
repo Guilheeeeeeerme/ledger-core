@@ -1,117 +1,149 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createLedgerService } = require('../src/ledgerService');
+const { LedgerService } = require('../dist/ledger/ledger.service');
 
 const transaction = {
   id: '11111111-1111-4111-8111-111111111111',
-  source_account_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-  destination_account_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  sourceAccountId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  destinationAccountId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   amount: '2500',
   currency: 'BRL',
-  status: 'pending'
+  status: 'pending',
+  description: '',
+  errorCode: null
 };
 
-function createDb({ existing = transaction, accounts, failOnEntries = false } = {}) {
-  const queries = [];
+function createDataSource({ existing = transaction, accounts, failOnEntries = false } = {}) {
+  const calls = [];
   let committed = false;
   let rolledBack = false;
 
-  const client = {
-    async query(sql, params = []) {
-      queries.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
-      if (sql.includes('FROM transactions') && sql.includes('FOR UPDATE')) {
-        return { rows: existing ? [existing] : [] };
-      }
-      if (sql.includes('FROM accounts') && sql.includes('FOR UPDATE')) {
-        return { rows: accounts || [
-          { id: transaction.destination_account_id, currency: 'BRL', balance: '1000' },
-          { id: transaction.source_account_id, currency: 'BRL', balance: '10000' }
-        ] };
-      }
-      if (failOnEntries && sql.includes('INSERT INTO ledger_entries')) {
+  const manager = {
+    async findOne(_entity, options) {
+      calls.push({ op: 'findOne', options });
+      return existing ? { ...existing } : null;
+    },
+    createQueryBuilder() {
+      const qb = {
+        where(_sql, params) {
+          calls.push({ op: 'where', params });
+          return qb;
+        },
+        orderBy(column, direction) {
+          calls.push({ op: 'orderBy', column, direction });
+          return qb;
+        },
+        setLock(mode) {
+          calls.push({ op: 'setLock', mode });
+          return qb;
+        },
+        async getMany() {
+          return accounts || [
+            { id: transaction.destinationAccountId, currency: 'BRL', balance: '1000' },
+            { id: transaction.sourceAccountId, currency: 'BRL', balance: '10000' }
+          ];
+        }
+      };
+      return qb;
+    },
+    async save(target, payload) {
+      const entities = payload === undefined ? target : payload;
+      calls.push({ op: 'save', entities });
+      if (failOnEntries && Array.isArray(entities) && entities.some((row) => row.accountId && row.amount != null)) {
         throw new Error('database unavailable');
       }
-      if (sql.includes("SET status = 'completed'")) {
-        return { rows: [{ ...transaction, status: 'completed' }], rowCount: 1 };
-      }
-      return { rows: [], rowCount: 1 };
+      return entities;
     }
   };
 
   return {
-    queries,
+    calls,
     get committed() { return committed; },
     get rolledBack() { return rolledBack; },
-    async withTransaction(callback) {
+    async transaction(callback) {
       try {
-        const result = await callback(client);
+        const result = await callback(manager);
         committed = true;
         return result;
       } catch (error) {
         rolledBack = true;
         throw error;
       }
-    },
-    query: client.query.bind(client)
+    }
   };
 }
 
 describe('ledgerService.processTransfer', () => {
   it('locks sorted accounts and writes balanced entries', async () => {
-    const db = createDb();
-    const service = createLedgerService(db);
+    const db = createDataSource();
+    const service = new LedgerService(db);
 
     const result = await service.processTransfer(transaction.id);
 
     assert.equal(result.status, 'completed');
     assert.equal(db.committed, true);
-    const accountLock = db.queries.find((query) => query.sql.includes('FROM accounts'));
-    assert.deepEqual(accountLock.params, [[
-      transaction.destination_account_id,
-      transaction.source_account_id
-    ]]);
-    const entries = db.queries.find((query) => query.sql.includes('INSERT INTO ledger_entries'));
-    assert.deepEqual(entries.params, [
-      transaction.id,
-      transaction.source_account_id,
-      -2500,
-      transaction.destination_account_id,
-      2500
+
+    const lock = db.calls.find((call) => call.op === 'findOne');
+    assert.equal(lock.options.lock.mode, 'pessimistic_write');
+
+    const where = db.calls.find((call) => call.op === 'where');
+    assert.deepEqual(where.params.ids, [
+      transaction.destinationAccountId,
+      transaction.sourceAccountId
     ]);
-    const balanceUpdate = db.queries.find((query) => query.sql.includes('UPDATE accounts'));
-    assert.match(balanceUpdate.sql, /\$3::bigint/);
-    assert.match(balanceUpdate.sql, /\$4::bigint/);
+
+    const order = db.calls.find((call) => call.op === 'orderBy');
+    assert.equal(order.column, 'account.id');
+    assert.equal(order.direction, 'ASC');
+
+    const setLock = db.calls.find((call) => call.op === 'setLock');
+    assert.equal(setLock.mode, 'pessimistic_write');
+
+    const entrySave = db.calls.find((call) => (
+      call.op === 'save'
+      && Array.isArray(call.entities)
+      && call.entities.some((row) => row.accountId)
+    ));
+    const amounts = entrySave.entities.map((row) => Number(row.amount));
+    assert.deepEqual(amounts, [-2500, 2500]);
+    assert.equal(amounts.reduce((sum, value) => sum + value, 0), 0);
+    assert.equal(entrySave.entities[0].accountId, transaction.sourceAccountId);
+    assert.equal(entrySave.entities[1].accountId, transaction.destinationAccountId);
   });
 
   it('does not mutate a completed transaction again', async () => {
-    const db = createDb({ existing: { ...transaction, status: 'completed' } });
-    const service = createLedgerService(db);
+    const db = createDataSource({ existing: { ...transaction, status: 'completed' } });
+    const service = new LedgerService(db);
 
     const result = await service.processTransfer(transaction.id);
 
     assert.equal(result.status, 'completed');
-    assert.equal(db.queries.some((query) => query.sql.includes('INSERT INTO ledger_entries')), false);
+    assert.equal(db.calls.some((call) => (
+      call.op === 'save' && Array.isArray(call.entities) && call.entities.some((row) => row.accountId)
+    )), false);
   });
 
   it('rejects insufficient funds without writing entries', async () => {
-    const db = createDb({ accounts: [
-      { id: transaction.destination_account_id, currency: 'BRL', balance: '1000' },
-      { id: transaction.source_account_id, currency: 'BRL', balance: '1000' }
+    const db = createDataSource({ accounts: [
+      { id: transaction.destinationAccountId, currency: 'BRL', balance: '1000' },
+      { id: transaction.sourceAccountId, currency: 'BRL', balance: '1000' }
     ] });
-    const service = createLedgerService(db);
+    const service = new LedgerService(db);
 
     await assert.rejects(
       () => service.processTransfer(transaction.id),
       (error) => error.code === 'INSUFFICIENT_FUNDS'
     );
     assert.equal(db.rolledBack, true);
-    assert.equal(db.queries.some((query) => query.sql.includes('INSERT INTO ledger_entries')), false);
+    assert.equal(db.calls.some((call) => (
+      call.op === 'save' && Array.isArray(call.entities) && call.entities.some((row) => row.accountId)
+    )), false);
   });
 
   it('rolls back when persistence fails', async () => {
-    const db = createDb({ failOnEntries: true });
-    const service = createLedgerService(db);
+    const db = createDataSource({ failOnEntries: true });
+    const service = new LedgerService(db);
 
     await assert.rejects(() => service.processTransfer(transaction.id));
     assert.equal(db.rolledBack, true);

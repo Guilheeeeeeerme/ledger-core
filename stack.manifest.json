@@ -1,9 +1,9 @@
 {
-  "name": "raw",
-  "http": "express",
-  "orm": "pg",
+  "name": "nestjs-typeorm-rabbitmq",
+  "http": "nestjs",
+  "orm": "typeorm",
   "broker": "rabbitmq",
-  "composeName": "ledger-core",
-  "appHostPort": 3000,
+  "composeName": "ledger-core-nestjs-typeorm-rabbitmq",
+  "appHostPort": 3002,
   "composeServices": ["app", "postgres", "rabbitmq"]
 }
