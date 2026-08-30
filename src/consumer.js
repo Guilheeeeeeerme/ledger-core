@@ -5,8 +5,27 @@ const { QUEUE } = require('./broker');
  * Converts domain and infrastructure outcomes into explicit AMQP delivery
  * decisions. This boundary is where at-least-once delivery becomes safe.
  */
+function processDelayMs() {
+  const parsed = Number(process.env.PROCESS_DELAY_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function prefetchCount() {
+  const parsed = Number(process.env.PREFETCH);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function handleMessage(message, channel, ledgerService) {
   if (!message) return;
+
+  const delayMs = processDelayMs();
+  if (delayMs > 0) {
+    await sleep(delayMs);
+  }
 
   let transactionId;
   try {
@@ -29,7 +48,7 @@ async function handleMessage(message, channel, ledgerService) {
 }
 
 async function startConsumer(channel, ledgerService) {
-  await channel.prefetch(5);
+  await channel.prefetch(prefetchCount());
   await channel.consume(
     QUEUE,
     (message) => handleMessage(message, channel, ledgerService),
