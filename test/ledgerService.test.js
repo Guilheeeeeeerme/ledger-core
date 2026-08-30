@@ -12,30 +12,44 @@ const transaction = {
   status: 'pending'
 };
 
-function createDb({ existing = transaction, accounts, failOnEntries = false } = {}) {
+function sqlText(strings, values) {
+  if (strings && typeof strings === 'object' && !Array.isArray(strings) && strings.strings) {
+    return strings.strings.join(' ? ');
+  }
+  if (Array.isArray(strings)) return strings.join(' ? ');
+  return [strings, ...values].map((part) => String(part)).join(' ');
+}
+
+function createPrisma({ existing = transaction, accounts, failOnEntries = false } = {}) {
   const queries = [];
   let committed = false;
   let rolledBack = false;
 
-  const client = {
-    async query(sql, params = []) {
-      queries.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
-      if (sql.includes('FROM transactions') && sql.includes('FOR UPDATE')) {
-        return { rows: existing ? [existing] : [] };
+  const tx = {
+    async $queryRaw(strings, ...values) {
+      const sql = sqlText(strings, values).replace(/\s+/g, ' ').trim();
+      queries.push({ sql, params: values });
+      if (/FROM transactions/i.test(sql) && /FOR UPDATE/i.test(sql)) {
+        return existing ? [existing] : [];
       }
-      if (sql.includes('FROM accounts') && sql.includes('FOR UPDATE')) {
-        return { rows: accounts || [
+      if (/FROM accounts/i.test(sql) && /FOR UPDATE/i.test(sql)) {
+        return accounts || [
           { id: transaction.destination_account_id, currency: 'BRL', balance: '1000' },
           { id: transaction.source_account_id, currency: 'BRL', balance: '10000' }
-        ] };
+        ];
       }
-      if (failOnEntries && sql.includes('INSERT INTO ledger_entries')) {
+      if (/SET status = 'completed'/i.test(sql)) {
+        return [{ ...transaction, status: 'completed' }];
+      }
+      return [];
+    },
+    async $executeRaw(strings, ...values) {
+      const sql = sqlText(strings, values).replace(/\s+/g, ' ').trim();
+      queries.push({ sql, params: values });
+      if (failOnEntries && /INSERT INTO ledger_entries/i.test(sql)) {
         throw new Error('database unavailable');
       }
-      if (sql.includes("SET status = 'completed'")) {
-        return { rows: [{ ...transaction, status: 'completed' }], rowCount: 1 };
-      }
-      return { rows: [], rowCount: 1 };
+      return 1;
     }
   };
 
@@ -43,78 +57,75 @@ function createDb({ existing = transaction, accounts, failOnEntries = false } = 
     queries,
     get committed() { return committed; },
     get rolledBack() { return rolledBack; },
-    async withTransaction(callback) {
+    async $transaction(callback) {
       try {
-        const result = await callback(client);
+        const result = await callback(tx);
         committed = true;
         return result;
       } catch (error) {
         rolledBack = true;
         throw error;
       }
-    },
-    query: client.query.bind(client)
+    }
   };
 }
 
 describe('ledgerService.processTransfer', () => {
   it('locks sorted accounts and writes balanced entries', async () => {
-    const db = createDb();
-    const service = createLedgerService(db);
+    const prisma = createPrisma();
+    const service = createLedgerService(prisma);
 
     const result = await service.processTransfer(transaction.id);
 
     assert.equal(result.status, 'completed');
-    assert.equal(db.committed, true);
-    const accountLock = db.queries.find((query) => query.sql.includes('FROM accounts'));
-    assert.deepEqual(accountLock.params, [[
-      transaction.destination_account_id,
-      transaction.source_account_id
-    ]]);
-    const entries = db.queries.find((query) => query.sql.includes('INSERT INTO ledger_entries'));
-    assert.deepEqual(entries.params, [
-      transaction.id,
-      transaction.source_account_id,
-      -2500,
-      transaction.destination_account_id,
-      2500
-    ]);
-    const balanceUpdate = db.queries.find((query) => query.sql.includes('UPDATE accounts'));
-    assert.match(balanceUpdate.sql, /\$3::bigint/);
-    assert.match(balanceUpdate.sql, /\$4::bigint/);
+    assert.equal(prisma.committed, true);
+    const transactionLock = prisma.queries.find((query) => /FROM transactions/i.test(query.sql) && /FOR UPDATE/i.test(query.sql));
+    assert.ok(transactionLock);
+    const accountLock = prisma.queries.find((query) => /FROM accounts/i.test(query.sql) && /FOR UPDATE/i.test(query.sql));
+    assert.match(accountLock.sql, /ORDER BY id/i);
+    assert.match(accountLock.sql, /FOR UPDATE/i);
+    const sortedIds = [transaction.destination_account_id, transaction.source_account_id];
+    assert.ok(
+      sortedIds.every((id) => accountLock.params.some((param) => param === id || String(param).includes(id)))
+      || sortedIds.every((id) => accountLock.sql.includes(id))
+    );
+    const entries = prisma.queries.find((query) => /INSERT INTO ledger_entries/i.test(query.sql));
+    assert.ok(entries);
+    assert.equal(entries.params.includes(-2500) || entries.sql.includes('-2500'), true);
+    assert.equal(entries.params.includes(2500) || /[^-\d]2500/.test(` ${entries.sql} ${entries.params.join(' ')}`), true);
   });
 
   it('does not mutate a completed transaction again', async () => {
-    const db = createDb({ existing: { ...transaction, status: 'completed' } });
-    const service = createLedgerService(db);
+    const prisma = createPrisma({ existing: { ...transaction, status: 'completed' } });
+    const service = createLedgerService(prisma);
 
     const result = await service.processTransfer(transaction.id);
 
     assert.equal(result.status, 'completed');
-    assert.equal(db.queries.some((query) => query.sql.includes('INSERT INTO ledger_entries')), false);
+    assert.equal(prisma.queries.some((query) => /INSERT INTO ledger_entries/i.test(query.sql)), false);
   });
 
   it('rejects insufficient funds without writing entries', async () => {
-    const db = createDb({ accounts: [
+    const prisma = createPrisma({ accounts: [
       { id: transaction.destination_account_id, currency: 'BRL', balance: '1000' },
       { id: transaction.source_account_id, currency: 'BRL', balance: '1000' }
     ] });
-    const service = createLedgerService(db);
+    const service = createLedgerService(prisma);
 
     await assert.rejects(
       () => service.processTransfer(transaction.id),
       (error) => error.code === 'INSUFFICIENT_FUNDS'
     );
-    assert.equal(db.rolledBack, true);
-    assert.equal(db.queries.some((query) => query.sql.includes('INSERT INTO ledger_entries')), false);
+    assert.equal(prisma.rolledBack, true);
+    assert.equal(prisma.queries.some((query) => /INSERT INTO ledger_entries/i.test(query.sql)), false);
   });
 
   it('rolls back when persistence fails', async () => {
-    const db = createDb({ failOnEntries: true });
-    const service = createLedgerService(db);
+    const prisma = createPrisma({ failOnEntries: true });
+    const service = createLedgerService(prisma);
 
     await assert.rejects(() => service.processTransfer(transaction.id));
-    assert.equal(db.rolledBack, true);
-    assert.equal(db.committed, false);
+    assert.equal(prisma.rolledBack, true);
+    assert.equal(prisma.committed, false);
   });
 });

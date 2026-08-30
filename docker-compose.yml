@@ -1,4 +1,4 @@
-name: ledger-core
+name: ledger-core-nestjs-prisma-bullmq
 
 services:
   postgres:
@@ -15,18 +15,15 @@ services:
       timeout: 3s
       retries: 15
 
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    environment:
-      RABBITMQ_DEFAULT_USER: ledger
-      RABBITMQ_DEFAULT_PASS: ledger
+  redis:
+    image: redis:7-alpine
     ports:
-      - "15672:15672"
+      - "6379:6379"
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 3s
-      timeout: 5s
-      retries: 20
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
 
   app:
     build:
@@ -36,15 +33,16 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgres://ledger:ledger@postgres:5432/ledger
-      RABBITMQ_URL: amqp://ledger:ledger@rabbitmq:5672
-      STACK_NAME: raw
-      QUEUE_NAME: ledger.transfers.raw
+      REDIS_URL: redis://redis:6379
+      STACK_NAME: nestjs-prisma-bullmq
+      QUEUE_NAME: ledger.bullmq
+      BULLMQ_QUEUE: ledger.bullmq
     ports:
       - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

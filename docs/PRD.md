@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-Build a self-contained ledger MVP that demonstrates a financial transfer from submission through asynchronous processing and durable accounting. The product must validate transfers, maintain account balances, persist a double-entry audit trail, expose related history, and remain consistent during duplicate delivery or failure.
+Build a self-contained ledger MVP that demonstrates a financial transfer from submission through asynchronous NestJS processing, Prisma persistence, and durable accounting. The product must validate transfers, maintain account balances, persist a double-entry audit trail, expose related history, and remain consistent during duplicate BullMQ delivery or failure.
 
 The complete system must start with:
 
@@ -20,10 +20,10 @@ docker compose up --build
 
 ### Included
 
-- JavaScript backend on Node.js 22.
-- Express HTTP API.
+- TypeScript NestJS backend on Node.js 22.
+- NestJS HTTP API with Prisma.
 - PostgreSQL persistence.
-- RabbitMQ asynchronous delivery and Management UI.
+- Redis and BullMQ asynchronous delivery.
 - Framework-free browser dashboard.
 - BRL seed accounts and integer minor-unit amounts.
 - Double-entry transfer processing.
@@ -48,12 +48,12 @@ docker compose up --build
 1. The user opens `http://localhost:3000`.
 2. The dashboard retrieves seeded accounts and current balances.
 3. The user selects source and destination accounts, enters a BRL amount, and submits.
-4. The API validates the request, persists a `pending` transaction, and publishes its ID to RabbitMQ.
-5. The consumer receives the transaction ID and starts a PostgreSQL transaction.
+4. The API validates the request, persists a `pending` transaction, and enqueues its ID on BullMQ.
+5. The worker receives the transaction ID and starts a PostgreSQL transaction.
 6. The ledger service locks the transaction and both accounts.
 7. The ledger service validates account existence, matching currency, and available funds.
 8. It inserts equal and opposite entries, updates both balances, and marks the transaction `completed` in one commit.
-9. The consumer acknowledges the message only after that commit.
+9. The worker completes the BullMQ job only after that commit.
 10. The dashboard polls transaction status and refreshes balances and history.
 
 ## 5. Functional requirements
@@ -77,7 +77,7 @@ docker compose up --build
 
 ### FR-2 — Process a transfer asynchronously
 
-The RabbitMQ consumer receives only the transaction ID. PostgreSQL remains the authoritative source for all financial fields.
+The BullMQ worker receives only the transaction ID. PostgreSQL remains the authoritative source for all financial fields.
 
 ### FR-3 — Query accounts
 
@@ -160,16 +160,16 @@ Sorted account locks reduce deadlock risk. Row locks prevent concurrent requests
 
 ## 9. Idempotency and broker behavior
 
-RabbitMQ delivery is treated as at least once.
+BullMQ delivery is treated as at least once.
 
 - `transactions.id` is the idempotency key.
 - A redelivered completed or failed transaction is a no-op.
 - A repeated HTTP request with the same ID and same financial payload returns the existing transaction.
 - The same ID with a different source, destination, amount, or currency returns `TRANSACTION_CONFLICT`.
-- Consumer `ack` occurs only after a successful commit or after a permanent domain failure is durably marked `failed`.
-- Unexpected errors use `nack(message, false, true)` so RabbitMQ can redeliver.
+- The job completes only after a successful commit or after a permanent domain failure is durably marked `failed`.
+- Unexpected errors are thrown so BullMQ retries the job.
 
-The MVP does not claim atomicity between initial PostgreSQL persistence and RabbitMQ publication. Retrying the same HTTP request republishes an existing `pending` transaction. A production system should use a transactional outbox.
+The MVP does not claim atomicity between initial PostgreSQL persistence and Redis/BullMQ publication. Retrying the same HTTP request enqueues an existing `pending` transaction again. A production system should use a transactional outbox.
 
 ## 10. Error contract
 
@@ -205,7 +205,7 @@ The dashboard must show:
 - current account cards and balances;
 - source and destination selectors;
 - amount and description inputs;
-- the API → RabbitMQ → Consumer → PostgreSQL path;
+- the API → Redis/BullMQ → Worker → PostgreSQL path;
 - asynchronous transaction status;
 - signed account history.
 
@@ -214,16 +214,16 @@ The dashboard uses BRL presentation because the seed and MVP flow use BRL.
 ## 12. Acceptance criteria
 
 1. `docker compose up --build` starts the complete system without manual database setup.
-2. PostgreSQL, RabbitMQ, and the application become healthy.
+2. PostgreSQL, Redis, and the application become healthy.
 3. Two English-named BRL seed accounts appear in the dashboard.
 4. A valid transfer returns `pending`, later becomes `completed`, changes both balances once, and creates exactly two entries whose sum is zero.
 5. Insufficient funds produces `failed` without entries or balance changes.
 6. Reprocessing the same transaction ID does not duplicate entries or balance mutations.
 7. Opposite or concurrent transfers lock accounts in deterministic order.
-8. API, consumer, dashboard, and deployment contracts have automated tests.
+8. API, worker, dashboard, and deployment contracts have automated tests.
 9. All repository code, comments, UI copy, and documentation are English.
 10. README documents architecture, operation, API, reliability, tests, structure, limitations, and license.
 
 ## 13. Success metric
 
-An evaluator can clone the repository, start it with one command, complete a transfer in the dashboard, inspect RabbitMQ, query PostgreSQL-backed results, and understand the consistency model without reading every source file.
+An evaluator can clone the repository, start it with one command, complete a transfer in the dashboard, inspect Redis/BullMQ processing, query PostgreSQL-backed results, and understand the consistency model without reading every source file.
