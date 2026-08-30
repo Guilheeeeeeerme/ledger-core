@@ -1,4 +1,4 @@
-const { describe, it, before } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
@@ -27,17 +27,24 @@ describe('ledger API', () => {
   };
 
   before(async () => {
-    app = createHttpApp({
+    app = await createHttpApp({
       ledgerService: service,
       publishTransfer: async (id) => published.push(id),
       healthCheck: async () => true
     });
   });
 
+  after(async () => {
+    if (app && typeof app.closeNest === 'function') await app.closeNest();
+  });
+
   it('reports health with the configured stack name', async () => {
     const response = await request(app).get('/api/health');
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { status: 'ok', stack: process.env.STACK_NAME || 'raw' });
+    assert.deepEqual(response.body, {
+      status: 'ok',
+      stack: process.env.STACK_NAME || 'nestjs-prisma-bullmq'
+    });
   });
 
   it('accepts and publishes a valid transfer', async () => {

@@ -11,7 +11,7 @@
     <div>
       <p class="eyebrow">ACCOUNTING MVP</p>
       <h1>Ledger Flow</h1>
-      <p class="subtitle">API → RabbitMQ → Consumer → PostgreSQL</p>
+      <p class="subtitle">API → Redis/BullMQ → Worker → PostgreSQL</p>
     </div>
     <span id="health" class="status pending">connecting</span>
   </header>
@@ -36,7 +36,7 @@
         <button type="submit">Send through broker</button>
       </form>
       <div id="flow" class="flow" hidden>
-        <span>API</span><b>→</b><span>RabbitMQ</span><b>→</b><span>Consumer</span><b>→</b><span>PostgreSQL</span>
+        <span>API</span><b>→</b><span>Redis/BullMQ</span><b>→</b><span>Worker</span><b>→</b><span>PostgreSQL</span>
       </div>
       <p id="feedback" class="feedback"></p>
     </section>

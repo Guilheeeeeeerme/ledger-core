@@ -1,8 +1,10 @@
 # Ledger Core
 
-Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through an HTTP API, RabbitMQ, a transactional consumer, and PostgreSQL.
+Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through a NestJS HTTP API, Redis/BullMQ, a transactional worker, Prisma, and PostgreSQL.
 
-It focuses on the failure modes that matter in financial systems: atomic balance changes, balanced entries, concurrent spending, duplicate message delivery, permanent domain failures, and transient infrastructure failures.
+It focuses on the failure modes that matter in financial systems: atomic balance changes, balanced entries, concurrent spending, duplicate job delivery, permanent domain failures, and transient infrastructure failures.
+
+This worktree is the NestJS + Prisma + BullMQ stack. The dashboard still polls transaction status; it does not subscribe to Redis.
 
 ## Architecture
 
@@ -10,27 +12,30 @@ It focuses on the failure modes that matter in financial systems: atomic balance
 Browser dashboard / HTTP client
               │
               ▼
-      Express HTTP API
+      NestJS HTTP API
               │ persist transaction as pending
               ▼
          PostgreSQL ◄──────────────────────┐
               │                            │ atomic commit
-              │ publish transaction ID     │
+              │ enqueue transaction ID     │
               ▼                            │
-          RabbitMQ ──► Consumer ──► Ledger service
+     Redis / BullMQ ──► Worker ──► Ledger service
 ```
 
-The API and consumer do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
+The API and worker do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
+
+Prisma has no native `FOR UPDATE`. The ledger service runs `SELECT ... FOR UPDATE` through `$queryRaw` inside `$transaction`, locking the transaction row and then both accounts `ORDER BY id`.
 
 Stack variants, Compose project names, and parallel worktree isolation are documented in [docs/STACKS.md](docs/STACKS.md).
 
 ### Components
 
-- **Express API:** accepts transfers and exposes accounts, transaction status, history, and health.
-- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.raw`.
-- **Consumer:** maps successful commits to `ack`, permanent domain failures to `failed` plus `ack`, and transient failures to `nack` with requeue.
+- **NestJS API:** accepts transfers and exposes accounts, transaction status, history, and health.
+- **Prisma:** maps `accounts`, `transactions`, and `ledger_entries` to PostgreSQL. Startup still applies `src/schema.sql` so CHECK constraints and seed rows match the product schema.
+- **Redis / BullMQ:** durable asynchronous jobs on `ledger.bullmq`.
+- **Worker:** after `processTransfer` commits, the job completes. A `DomainError` marks the transfer `failed` and completes the job without retry. Any other thrown error is retried by BullMQ.
 - **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
-- **Dashboard:** provides a dependency-free way to submit and observe transfers.
+- **Dashboard:** provides a dependency-free way to submit and observe transfers by polling.
 
 For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md).
 
@@ -39,7 +44,7 @@ For product requirements and acceptance criteria, see [docs/PRD.md](docs/PRD.md)
 ### Requirements
 
 - Docker Engine with Docker Compose v2
-- Ports `3000` and `15672` available
+- Ports `3000` and `6379` available
 
 Start the full stack:
 
@@ -47,12 +52,10 @@ Start the full stack:
 docker compose up --build
 ```
 
-Wait until `app`, `postgres`, and `rabbitmq` report healthy, then open:
+Wait until `app`, `postgres`, and `redis` report healthy, then open:
 
 - Dashboard: http://localhost:3000
-- RabbitMQ Management: http://localhost:15672
-- RabbitMQ username: `ledger`
-- RabbitMQ password: `ledger`
+- Redis: localhost:6379
 
 The application applies its idempotent schema and seed during startup. No manual database setup is required.
 
@@ -80,7 +83,6 @@ docker compose down -v
 3. Enter an amount and submit the transfer.
 4. Observe the transaction move from `pending` to `completed` or `failed`.
 5. Confirm both balances and the selected account history update.
-6. Open RabbitMQ Management and inspect the durable `ledger.transfers.raw` queue.
 
 The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
@@ -97,7 +99,7 @@ GET /api/health
 Success response:
 
 ```json
-{ "status": "ok", "stack": "raw" }
+{ "status": "ok", "stack": "nestjs-prisma-bullmq" }
 ```
 
 ### List accounts
@@ -151,7 +153,7 @@ GET /api/transactions/:transactionId
 
 Possible statuses:
 
-- `pending`: persisted and awaiting successful consumer processing.
+- `pending`: persisted and awaiting successful worker processing.
 - `completed`: both ledger entries and both balances committed atomically.
 - `failed`: a permanent domain rule rejected processing; `errorCode` explains why.
 
@@ -203,11 +205,11 @@ The unique `(transaction_id, account_id)` constraint prevents a transaction from
 
 ### Atomicity
 
-The consumer performs these operations in one PostgreSQL transaction:
+The worker performs these operations in one PostgreSQL transaction:
 
-1. Lock the transaction row.
+1. Lock the transaction row with `SELECT ... FOR UPDATE`.
 2. Return immediately if it is no longer `pending`.
-3. Lock both accounts in sorted UUID order.
+3. Lock both accounts in sorted UUID order with `SELECT ... FOR UPDATE`.
 4. Validate account existence, currency, and available funds.
 5. Insert equal and opposite ledger entries.
 6. Apply equal and opposite balance deltas.
@@ -222,13 +224,13 @@ Any error rolls back every step.
 
 ### Idempotency
 
-RabbitMQ provides at-least-once delivery, so duplicate messages are expected. A completed or failed transaction is a no-op when redelivered. The consumer acknowledges only after `processTransfer` returns, which means the database commit has completed.
+BullMQ provides at-least-once delivery, so duplicate jobs are expected. A completed or failed transaction is a no-op when retried. The job completes only after `processTransfer` returns, which means the database commit has completed.
 
 ### Failure classification
 
-- Domain errors are permanent for the submitted transaction. The consumer marks it `failed` and acknowledges the message.
-- Unexpected infrastructure errors are considered transient. The consumer rejects the message with requeue enabled.
-- If the process exits after commit but before `ack`, RabbitMQ redelivers the message and transaction status makes processing idempotent.
+- Domain errors are permanent for the submitted transaction. The worker marks it `failed` and completes the job so BullMQ does not retry it.
+- Unexpected infrastructure errors are considered transient. The processor throws and BullMQ retries the job.
+- If the process exits after commit but before the job is marked complete, BullMQ delivers the job again and transaction status makes processing idempotent.
 
 ## Testing
 
@@ -245,10 +247,10 @@ The suite covers:
 - deterministic account lock order;
 - balanced entry construction;
 - insufficient funds and rollback behavior;
-- database parameter types for balance deltas;
+- Prisma `$queryRaw` `FOR UPDATE` locking;
 - idempotent transaction processing;
 - API status codes and response contracts;
-- consumer `ack` and `nack` semantics;
+- BullMQ complete-versus-retry semantics;
 - dashboard asset delivery;
 - Compose and documentation contracts;
 - English-only repository content.
@@ -258,13 +260,14 @@ For an integrated check, start Compose and submit the same `transactionId` twice
 ## Project structure
 
 ```text
-src/domain/validateTransfer.js  Input normalization and domain errors
-src/ledgerService.js           Accounting invariants and database operations
-src/broker.js                  RabbitMQ connection and durable publication
-src/consumer.js                Delivery handling and acknowledgement policy
-src/app.js                     Express routes and static dashboard delivery
-src/server.js                  Dependency composition and startup retries
+src/domain/validateTransfer.ts Input normalization and domain errors
+src/ledgerService.ts           Accounting invariants and Prisma operations
+src/broker.ts                  BullMQ queue, Redis connection, and worker start
+src/consumer.ts                Job processing and retry policy
+src/app.ts                     NestJS routes and static dashboard delivery
+src/main.ts                    Dependency composition and startup retries
 src/schema.sql                 Constraints, indexes, and idempotent seed
+prisma/schema.prisma           Prisma models matching schema.sql
 public/                        Framework-free dashboard
 test/                          Unit and HTTP contract tests
 test/helpers/httpApp.js        HTTP app factory used by API tests
@@ -282,11 +285,13 @@ The container uses these environment variables:
 
 - `PORT`, default `3000`
 - `DATABASE_URL`, default `postgres://ledger:ledger@localhost:5432/ledger`
-- `RABBITMQ_URL`, default `amqp://ledger:ledger@localhost:5672`
-- `STACK_NAME`, default `raw`
-- `QUEUE_NAME`, default `ledger.transfers.raw`
+- `REDIS_URL`, default `redis://localhost:6379`
+- `STACK_NAME`, default `nestjs-prisma-bullmq`
+- `QUEUE_NAME` or `BULLMQ_QUEUE`, default `ledger.bullmq`
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
+
+Parallel worktrees copy `.env.parallel.example` (`PORT=3003`, database `ledger_bullmq`) and share Redis on localhost:6379. See [docs/STACKS.md](docs/STACKS.md).
 
 ## Limitations
 
@@ -296,13 +301,13 @@ This is an evaluation-focused MVP, not a production banking system. It intention
 - TLS and secret management;
 - multiple currencies within one transfer or foreign-exchange conversion;
 - reversals, refunds, holds, and available-versus-posted balance distinctions;
-- outbox-based atomicity between PostgreSQL and RabbitMQ publication;
+- outbox-based atomicity between PostgreSQL and Redis/BullMQ publication;
 - dead-letter queues, bounded retry policy, and operational alerting;
 - cursor pagination and archival for large histories;
 - reconciliation jobs and stored-balance drift detection;
 - production-grade observability and audit access controls.
 
-The API persists `pending` before publishing. A broker failure can therefore leave a pending row until the client retries with the same `transactionId`; a production design would use a transactional outbox.
+The API persists `pending` before enqueueing a BullMQ job. A broker failure can therefore leave a pending row until the client retries with the same `transactionId`; a production design would use a transactional outbox.
 
 ## License
 

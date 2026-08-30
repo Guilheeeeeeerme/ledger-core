@@ -1,5 +1,8 @@
 class DomainError extends Error {
-  constructor(code, message, status = 400) {
+  code: string;
+  status: number;
+
+  constructor(code: string, message: string, status = 400) {
     super(message);
     this.name = 'DomainError';
     this.code = code;
@@ -9,17 +12,26 @@ class DomainError extends Error {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function validateTransfer(input) {
-  const requiredIds = ['transactionId', 'sourceAccountId', 'destinationAccountId'];
+type TransferInput = {
+  transactionId?: string;
+  sourceAccountId?: string;
+  destinationAccountId?: string;
+  amount?: number;
+  currency?: string;
+  description?: string;
+};
+
+function validateTransfer(input: TransferInput) {
+  const requiredIds = ['transactionId', 'sourceAccountId', 'destinationAccountId'] as const;
 
   for (const field of requiredIds) {
-    if (typeof input?.[field] !== 'string' || !UUID_PATTERN.test(input[field])) {
+    const value = input?.[field];
+    if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
       throw new DomainError('INVALID_INPUT', `${field} must be a valid UUID`);
     }
   }
 
-  // Money stays in the smallest currency unit, avoiding floating-point rounding.
-  if (!Number.isSafeInteger(input.amount) || input.amount <= 0) {
+  if (!Number.isSafeInteger(input.amount) || (input.amount as number) <= 0) {
     throw new DomainError('INVALID_AMOUNT', 'amount must be a positive integer in cents');
   }
 
@@ -33,9 +45,13 @@ function validateTransfer(input) {
 
   return {
     ...input,
+    transactionId: input.transactionId as string,
+    sourceAccountId: input.sourceAccountId as string,
+    destinationAccountId: input.destinationAccountId as string,
+    amount: input.amount as number,
     currency: input.currency.toUpperCase(),
     description: typeof input.description === 'string' ? input.description.trim() : ''
   };
 }
 
-module.exports = { DomainError, validateTransfer };
+export { DomainError, validateTransfer };
