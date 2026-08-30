@@ -39,6 +39,10 @@ services:
       RABBITMQ_URL: amqp://ledger:ledger@rabbitmq:5672
       STACK_NAME: express-prisma-rabbitmq
       QUEUE_NAME: ledger.transfers.express_prisma
+      # Deliberate 5s consumer delay so the queue can accumulate Ready messages.
+      PROCESS_DELAY_MS: "5000"
+      # Max unacked messages per consumer (default 5).
+      PREFETCH: "5"
     ports:
       - "3000:3000"
     depends_on:

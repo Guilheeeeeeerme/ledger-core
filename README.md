@@ -292,6 +292,9 @@ The container uses these environment variables:
 - `STACK_NAME`, Compose sets `express-prisma-rabbitmq`
 - `QUEUE_NAME`, default `ledger.transfers.express_prisma`
 
+- `PROCESS_DELAY_MS`, default `0` in code; Compose and `.env.parallel.example` set `5000` (5s) so the queue can accumulate Ready messages
+- `PREFETCH`, default `5` (max unacked messages per consumer)
+
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
 
 ## Limitations
