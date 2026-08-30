@@ -78,6 +78,70 @@ th, td {
   font-size: 0.85rem;
 }
 
+.feedback {
+  margin-top: 0.75rem;
+  color: #7a1f1f;
+}
+
+.hint {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #555;
+}
+
+h3 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.tx-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tx-card {
+  border: 1px solid #cfc8b8;
+  padding: 0.6rem 0.75rem;
+  background: #faf8f4;
+}
+
+.tx-card p {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+}
+
+.tx-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.tx-card small {
+  display: block;
+  margin-top: 0.25rem;
+  word-break: break-all;
+}
+
+.status-pending {
+  border-left: 3px solid #8a7a3a;
+}
+
+.status-completed {
+  border-left: 3px solid #2f6b3a;
+}
+
+.status-failed {
+  border-left: 3px solid #8a3030;
+}
+
+.error-code {
+  color: #7a1f1f;
+}
+
 @media (max-width: 700px) {
   form {
     grid-template-columns: 1fr;
