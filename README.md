@@ -1,10 +1,12 @@
 # Ledger Core
 
-Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through an HTTP API, RabbitMQ, a transactional consumer, and PostgreSQL.
+Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through an HTTP API, RabbitMQ, a transactional consumer, and PostgreSQL via Sequelize.
 
 It focuses on the failure modes that matter in financial systems: atomic balance changes, balanced entries, concurrent spending, duplicate message delivery, permanent domain failures, and transient infrastructure failures.
 
 ## Architecture
+
+This stack is **Express + Sequelize + RabbitMQ**.
 
 ```text
 Browser dashboard / HTTP client
@@ -13,7 +15,7 @@ Browser dashboard / HTTP client
       Express HTTP API
               │ persist transaction as pending
               ▼
-         PostgreSQL ◄──────────────────────┐
+   PostgreSQL (Sequelize) ◄───────────────┐
               │                            │ atomic commit
               │ publish transaction ID     │
               ▼                            │
@@ -27,7 +29,8 @@ Stack variants, Compose project names, and parallel worktree isolation are docum
 ### Components
 
 - **Express API:** accepts transfers and exposes accounts, transaction status, history, and health.
-- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.raw`.
+- **Sequelize:** maps accounts, transactions, and ledger entries with transactional locking.
+- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.sequelize`.
 - **Consumer:** maps successful commits to `ack`, permanent domain failures to `failed` plus `ack`, and transient failures to `nack` with requeue.
 - **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
 - **Dashboard:** provides a dependency-free way to submit and observe transfers.
@@ -80,7 +83,7 @@ docker compose down -v
 3. Enter an amount and submit the transfer.
 4. Observe the transaction move from `pending` to `completed` or `failed`.
 5. Confirm both balances and the selected account history update.
-6. Open RabbitMQ Management and inspect the durable `ledger.transfers.raw` queue.
+6. Open RabbitMQ Management and inspect the durable `ledger.transfers.sequelize` queue.
 
 The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
@@ -97,7 +100,7 @@ GET /api/health
 Success response:
 
 ```json
-{ "status": "ok", "stack": "raw" }
+{ "status": "ok", "stack": "express-sequelize-rabbitmq" }
 ```
 
 ### List accounts
@@ -259,12 +262,14 @@ For an integrated check, start Compose and submit the same `transactionId` twice
 
 ```text
 src/domain/validateTransfer.js  Input normalization and domain errors
-src/ledgerService.js           Accounting invariants and database operations
+src/ledgerService.js           Accounting invariants and Sequelize operations
+src/models/                    Sequelize model definitions and seed accounts
+src/db.js                      Sequelize connection, sync, and health check
 src/broker.js                  RabbitMQ connection and durable publication
 src/consumer.js                Delivery handling and acknowledgement policy
 src/app.js                     Express routes and static dashboard delivery
 src/server.js                  Dependency composition and startup retries
-src/schema.sql                 Constraints, indexes, and idempotent seed
+src/schema.sql                 Reference DDL matching the Sequelize models
 public/                        Framework-free dashboard
 test/                          Unit and HTTP contract tests
 test/helpers/httpApp.js        HTTP app factory used by API tests
@@ -283,8 +288,8 @@ The container uses these environment variables:
 - `PORT`, default `3000`
 - `DATABASE_URL`, default `postgres://ledger:ledger@localhost:5432/ledger`
 - `RABBITMQ_URL`, default `amqp://ledger:ledger@localhost:5672`
-- `STACK_NAME`, default `raw`
-- `QUEUE_NAME`, default `ledger.transfers.raw`
+- `STACK_NAME`, default `express-sequelize-rabbitmq`
+- `QUEUE_NAME`, default `ledger.transfers.sequelize`
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
 

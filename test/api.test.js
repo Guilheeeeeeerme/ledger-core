@@ -37,7 +37,10 @@ describe('ledger API', () => {
   it('reports health with the configured stack name', async () => {
     const response = await request(app).get('/api/health');
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { status: 'ok', stack: process.env.STACK_NAME || 'raw' });
+    assert.deepEqual(response.body, {
+      status: 'ok',
+      stack: process.env.STACK_NAME || 'express-sequelize-rabbitmq'
+    });
   });
 
   it('accepts and publishes a valid transfer', async () => {

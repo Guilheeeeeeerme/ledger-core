@@ -1,33 +1,30 @@
 const { DomainError, validateTransfer } = require('./domain/validateTransfer');
+const { Op } = require('sequelize');
 
 /**
  * Creates the domain boundary used by both HTTP routes and broker delivery.
- * The injected database adapter keeps accounting policy independently testable.
+ * The injected Sequelize models keep accounting policy independently testable.
  */
-function createLedgerService(db) {
+function createLedgerService({ Account, Transaction, LedgerEntry, withTransaction }) {
   async function createPendingTransfer(input) {
     const transfer = validateTransfer(input);
-    const inserted = await db.query(
-      `INSERT INTO transactions
-        (id, source_account_id, destination_account_id, amount, currency, description, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-       ON CONFLICT (id) DO NOTHING
-       RETURNING *`,
-      [
-        transfer.transactionId,
-        transfer.sourceAccountId,
-        transfer.destinationAccountId,
-        transfer.amount,
-        transfer.currency,
-        transfer.description
-      ]
-    );
+    const [row, created] = await Transaction.findOrCreate({
+      where: { id: transfer.transactionId },
+      defaults: {
+        id: transfer.transactionId,
+        sourceAccountId: transfer.sourceAccountId,
+        destinationAccountId: transfer.destinationAccountId,
+        amount: transfer.amount,
+        currency: transfer.currency,
+        description: transfer.description,
+        status: 'pending'
+      }
+    });
 
-    if (inserted.rowCount === 1) return mapTransaction(inserted.rows[0]);
+    if (created) return mapTransaction(row);
 
-    const existing = await getTransaction(transfer.transactionId);
-    const samePayload = existing
-      && existing.sourceAccountId === transfer.sourceAccountId
+    const existing = mapTransaction(row);
+    const samePayload = existing.sourceAccountId === transfer.sourceAccountId
       && existing.destinationAccountId === transfer.destinationAccountId
       && existing.amount === transfer.amount
       && existing.currency === transfer.currency;
@@ -40,34 +37,35 @@ function createLedgerService(db) {
 
   /**
    * Applies one pending transfer exactly once. All financial mutations occur
-   * inside the transaction supplied by the database adapter.
+   * inside the Sequelize transaction supplied by the database adapter.
    */
   async function processTransfer(transactionId) {
-    return db.withTransaction(async (client) => {
-      const transactionResult = await client.query(
-        'SELECT * FROM transactions WHERE id = $1 FOR UPDATE',
-        [transactionId]
-      );
-      const transaction = transactionResult.rows[0];
+    return withTransaction(async (t) => {
+      const transaction = await Transaction.findByPk(transactionId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
 
       if (!transaction) throw new DomainError('TRANSACTION_NOT_FOUND', 'transaction not found', 404);
       // A redelivered broker message becomes a no-op after the first commit.
       if (transaction.status !== 'pending') return mapTransaction(transaction);
 
       // Stable lock ordering prevents opposite transfers from deadlocking each other.
-      const accountIds = [transaction.source_account_id, transaction.destination_account_id].sort();
-      const accountResult = await client.query(
-        'SELECT id, currency, balance FROM accounts WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE',
-        [accountIds]
-      );
+      const accountIds = [transaction.sourceAccountId, transaction.destinationAccountId].sort();
+      const accountRows = await Account.findAll({
+        where: { id: { [Op.in]: accountIds } },
+        order: [['id', 'ASC']],
+        lock: t.LOCK.UPDATE,
+        transaction: t
+      });
 
-      if (accountResult.rows.length !== 2) {
+      if (accountRows.length !== 2) {
         throw new DomainError('ACCOUNT_NOT_FOUND', 'source or destination account not found', 404);
       }
 
-      const accounts = new Map(accountResult.rows.map((account) => [account.id, account]));
-      const source = accounts.get(transaction.source_account_id);
-      const destination = accounts.get(transaction.destination_account_id);
+      const accounts = new Map(accountRows.map((account) => [account.id, account]));
+      const source = accounts.get(transaction.sourceAccountId);
+      const destination = accounts.get(transaction.destinationAccountId);
       const amount = Number(transaction.amount);
 
       if (source.currency.trim() !== transaction.currency.trim()
@@ -79,72 +77,87 @@ function createLedgerService(db) {
       }
 
       // Both entries live in the same DB transaction; partial money movement cannot commit.
-      await client.query(
-        `INSERT INTO ledger_entries (transaction_id, account_id, amount)
-         VALUES ($1, $2, $3), ($1, $4, $5)`,
-        [transaction.id, source.id, -amount, destination.id, amount]
-      );
-      await client.query(
-        `UPDATE accounts
-         SET balance = balance + CASE WHEN id = $1 THEN $3::bigint ELSE $4::bigint END
-         WHERE id IN ($1, $2)`,
-        [source.id, destination.id, -amount, amount]
-      );
-      const completed = await client.query(
-        `UPDATE transactions
-         SET status = 'completed', processed_at = NOW(), error_code = NULL
-         WHERE id = $1 RETURNING *`,
-        [transaction.id]
-      );
-      return mapTransaction(completed.rows[0]);
+      await LedgerEntry.bulkCreate([
+        { transactionId: transaction.id, accountId: source.id, amount: -amount },
+        { transactionId: transaction.id, accountId: destination.id, amount }
+      ], { transaction: t });
+
+      await source.decrement('balance', { by: amount, transaction: t });
+      await destination.increment('balance', { by: amount, transaction: t });
+
+      await transaction.update({
+        status: 'completed',
+        processedAt: new Date(),
+        errorCode: null
+      }, { transaction: t });
+
+      return mapTransaction(transaction);
     });
   }
 
   async function markFailed(id, code) {
-    const result = await db.query(
-      `UPDATE transactions SET status = 'failed', error_code = $2, processed_at = NOW()
-       WHERE id = $1 AND status = 'pending' RETURNING *`,
-      [id, code]
+    const [count, rows] = await Transaction.update(
+      {
+        status: 'failed',
+        errorCode: code,
+        processedAt: new Date()
+      },
+      {
+        where: { id, status: 'pending' },
+        returning: true
+      }
     );
-    return result.rows[0] ? mapTransaction(result.rows[0]) : getTransaction(id);
+    if (count > 0 && rows[0]) return mapTransaction(rows[0]);
+    return getTransaction(id);
   }
 
   async function getTransaction(id) {
-    const result = await db.query('SELECT * FROM transactions WHERE id = $1', [id]);
-    return result.rows[0] ? mapTransaction(result.rows[0]) : null;
+    const row = await Transaction.findByPk(id);
+    return row ? mapTransaction(row) : null;
   }
 
   async function listAccounts() {
-    const result = await db.query(
-      'SELECT id, name, currency, balance, created_at FROM accounts ORDER BY name'
-    );
-    return result.rows.map((account) => ({
-      ...account,
+    const rows = await Account.findAll({ order: [['name', 'ASC']] });
+    return rows.map((account) => ({
+      id: account.id,
+      name: account.name,
       currency: account.currency.trim(),
-      balance: Number(account.balance)
+      balance: Number(account.balance),
+      created_at: account.createdAt
     }));
   }
 
   async function listAccountHistory(accountId) {
-    const result = await db.query(
-      `SELECT e.id, e.transaction_id, e.amount, e.created_at, t.description, t.currency,
-              CASE WHEN t.source_account_id = $1 THEN t.destination_account_id
-                   ELSE t.source_account_id END AS counterparty_account_id
-       FROM ledger_entries e
-       JOIN transactions t ON t.id = e.transaction_id
-       WHERE e.account_id = $1
-       ORDER BY e.created_at DESC`,
-      [accountId]
-    );
-    return result.rows.map((entry) => ({
-      id: entry.id,
-      transactionId: entry.transaction_id,
-      amount: Number(entry.amount),
-      currency: entry.currency.trim(),
-      description: entry.description,
-      counterpartyAccountId: entry.counterparty_account_id,
-      createdAt: entry.created_at
-    }));
+    const rows = await LedgerEntry.findAll({
+      where: { accountId },
+      include: [{
+        model: Transaction,
+        required: true,
+        attributes: [
+          'description',
+          'currency',
+          'sourceAccountId',
+          'destinationAccountId'
+        ]
+      }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    return rows.map((entry) => {
+      const tx = entry.Transaction;
+      const counterpartyAccountId = tx.sourceAccountId === accountId
+        ? tx.destinationAccountId
+        : tx.sourceAccountId;
+      return {
+        id: entry.id,
+        transactionId: entry.transactionId,
+        amount: Number(entry.amount),
+        currency: tx.currency.trim(),
+        description: tx.description,
+        counterpartyAccountId,
+        createdAt: entry.createdAt
+      };
+    });
   }
 
   return {
@@ -158,17 +171,18 @@ function createLedgerService(db) {
 }
 
 function mapTransaction(row) {
+  const data = typeof row.get === 'function' ? row.get({ plain: true }) : row;
   return {
-    id: row.id,
-    sourceAccountId: row.source_account_id,
-    destinationAccountId: row.destination_account_id,
-    amount: Number(row.amount),
-    currency: row.currency.trim(),
-    description: row.description,
-    status: row.status,
-    errorCode: row.error_code,
-    createdAt: row.created_at,
-    processedAt: row.processed_at
+    id: data.id,
+    sourceAccountId: data.sourceAccountId ?? data.source_account_id,
+    destinationAccountId: data.destinationAccountId ?? data.destination_account_id,
+    amount: Number(data.amount),
+    currency: String(data.currency).trim(),
+    description: data.description,
+    status: data.status,
+    errorCode: data.errorCode ?? data.error_code ?? null,
+    createdAt: data.createdAt ?? data.created_at,
+    processedAt: data.processedAt ?? data.processed_at ?? null
   };
 }
 
