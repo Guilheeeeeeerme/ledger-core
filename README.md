@@ -1,6 +1,6 @@
 # Ledger Core
 
-Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through an HTTP API, RabbitMQ, a transactional consumer, and PostgreSQL.
+Ledger Core is the Express Prisma RabbitMQ stack: a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through an HTTP API, RabbitMQ, a transactional consumer, Prisma Client, and PostgreSQL.
 
 It focuses on the failure modes that matter in financial systems: atomic balance changes, balanced entries, concurrent spending, duplicate message delivery, permanent domain failures, and transient infrastructure failures.
 
@@ -13,21 +13,22 @@ Browser dashboard / HTTP client
       Express HTTP API
               │ persist transaction as pending
               ▼
-         PostgreSQL ◄──────────────────────┐
+     Prisma Client / PostgreSQL ◄──────────┐
               │                            │ atomic commit
               │ publish transaction ID     │
               ▼                            │
           RabbitMQ ──► Consumer ──► Ledger service
 ```
 
-The API and consumer do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
+The API and consumer do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes. Prisma Client has no native `FOR UPDATE`, so row locks run through `prisma.$queryRaw` inside `prisma.$transaction`.
 
 Stack variants, Compose project names, and parallel worktree isolation are documented in [docs/STACKS.md](docs/STACKS.md).
 
 ### Components
 
 - **Express API:** accepts transfers and exposes accounts, transaction status, history, and health.
-- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.raw`.
+- **Prisma Client:** maps accounts, transactions, and ledger entries; locking and double-entry writes use tagged raw SQL.
+- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.express_prisma`.
 - **Consumer:** maps successful commits to `ack`, permanent domain failures to `failed` plus `ack`, and transient failures to `nack` with requeue.
 - **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
 - **Dashboard:** provides a dependency-free way to submit and observe transfers.
@@ -80,7 +81,7 @@ docker compose down -v
 3. Enter an amount and submit the transfer.
 4. Observe the transaction move from `pending` to `completed` or `failed`.
 5. Confirm both balances and the selected account history update.
-6. Open RabbitMQ Management and inspect the durable `ledger.transfers.raw` queue.
+6. Open RabbitMQ Management and inspect the durable `ledger.transfers.express_prisma` queue.
 
 The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
@@ -97,7 +98,7 @@ GET /api/health
 Success response:
 
 ```json
-{ "status": "ok", "stack": "raw" }
+{ "status": "ok", "stack": "express-prisma-rabbitmq" }
 ```
 
 ### List accounts
@@ -218,7 +219,7 @@ Any error rolls back every step.
 
 ### Concurrency
 
-`SELECT ... FOR UPDATE` prevents two concurrent transfers from spending the same source balance. Sorting account IDs before locking reduces deadlock risk for transfers moving in opposite directions.
+`SELECT ... FOR UPDATE` via `prisma.$queryRaw` prevents two concurrent transfers from spending the same source balance. Sorting account IDs before locking reduces deadlock risk for transfers moving in opposite directions.
 
 ### Idempotency
 
@@ -236,6 +237,7 @@ Local requirements: Node.js 22 or newer.
 
 ```bash
 npm install
+npx prisma generate
 npm test
 ```
 
@@ -258,6 +260,8 @@ For an integrated check, start Compose and submit the same `transactionId` twice
 ## Project structure
 
 ```text
+prisma/schema.prisma           Prisma models matching src/schema.sql
+prisma/seed.js                 Alice and Bob seed accounts
 src/domain/validateTransfer.js  Input normalization and domain errors
 src/ledgerService.js           Accounting invariants and database operations
 src/broker.js                  RabbitMQ connection and durable publication
@@ -265,6 +269,7 @@ src/consumer.js                Delivery handling and acknowledgement policy
 src/app.js                     Express routes and static dashboard delivery
 src/server.js                  Dependency composition and startup retries
 src/schema.sql                 Constraints, indexes, and idempotent seed
+src/db.js                      Prisma Client and schema bootstrap
 public/                        Framework-free dashboard
 test/                          Unit and HTTP contract tests
 test/helpers/httpApp.js        HTTP app factory used by API tests
@@ -283,8 +288,8 @@ The container uses these environment variables:
 - `PORT`, default `3000`
 - `DATABASE_URL`, default `postgres://ledger:ledger@localhost:5432/ledger`
 - `RABBITMQ_URL`, default `amqp://ledger:ledger@localhost:5672`
-- `STACK_NAME`, default `raw`
-- `QUEUE_NAME`, default `ledger.transfers.raw`
+- `STACK_NAME`, Compose sets `express-prisma-rabbitmq`
+- `QUEUE_NAME`, default `ledger.transfers.express_prisma`
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
 

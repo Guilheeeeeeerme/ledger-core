@@ -1,30 +1,20 @@
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgres://ledger:ledger@localhost:5432/ledger'
-});
-
-async function query(text, params) {
-  return pool.query(text, params);
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = 'postgres://ledger:ledger@localhost:5432/ledger';
 }
 
+const { PrismaClient } = require('@prisma/client');
+
+const prisma = new PrismaClient();
+
 /**
- * Runs a unit of work on one checked-out connection and guarantees that no
- * partial database state survives a thrown error.
+ * Applies idempotent DDL and seed from schema.sql. Prisma Client has no
+ * FOR UPDATE helper, so runtime locking stays on raw SQL; bootstrap stays SQL too.
  */
-async function withTransaction(callback) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
+async function applySchema(sqlText) {
+  const statements = sqlText.split(';').map((part) => part.trim()).filter(Boolean);
+  for (const statement of statements) {
+    await prisma.$executeRawUnsafe(statement);
   }
 }
 
-module.exports = { pool, query, withTransaction };
+module.exports = { prisma, applySchema };
