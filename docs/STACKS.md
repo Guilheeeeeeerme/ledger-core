@@ -31,6 +31,7 @@ Do not run two stack branches at the same time on one host. Every stack binds po
 - RabbitMQ management: http://localhost:15672 (user/password `ledger`)
 - `STACK_NAME=express-sequelize-rabbitmq`
 - Queue: `ledger.transfers.sequelize`
+- Backlog simulation: `PROCESS_DELAY_MS=5000` (5s) and `PREFETCH=5` so Ready messages can accumulate while you inspect the broker.
 
 ## Other stack branches
 
