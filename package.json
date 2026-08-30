@@ -2,7 +2,7 @@
   "name": "ledger-core",
   "version": "1.0.0",
   "private": true,
-  "description": "Double-entry ledger MVP with NestJS, TypeORM, RabbitMQ, and an observable dashboard",
+  "description": "Double-entry ledger MVP with NestJS, TypeORM, RabbitMQ, and a React tester",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,7 +14,8 @@
     "build": "nest build",
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",
-    "test": "nest build && node --test"
+    "build:web": "npm --prefix web ci && npm --prefix web run build",
+    "test": "npm run build:web && nest build && node --test"
   },
   "engines": {
     "node": ">=22"
