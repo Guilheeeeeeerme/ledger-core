@@ -1,0 +1,28 @@
+{
+  "name": "ledger-core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Double-entry ledger MVP with an HTTP API, PostgreSQL, RabbitMQ, and an observable dashboard",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Guilheeeeeeerme/ledger-core.git"
+  },
+  "homepage": "https://github.com/Guilheeeeeeerme/ledger-core#readme",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.8",
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "supertest": "^7.1.4"
+  }
+}
