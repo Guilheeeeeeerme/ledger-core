@@ -21,10 +21,11 @@ export class BrokerService implements OnModuleDestroy {
           this.channel = undefined;
           this.connection = undefined;
         });
+        console.log('[ledger] broker ready');
         return this.channel;
       } catch (error) {
         if (attempt === 30) throw error;
-        console.log(`Waiting for RabbitMQ (${attempt}/30)...`);
+        console.log(`[ledger] waiting for RabbitMQ (${attempt}/30)`);
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
@@ -39,6 +40,7 @@ export class BrokerService implements OnModuleDestroy {
       Buffer.from(JSON.stringify({ transactionId })),
       { persistent: true, contentType: 'application/json' }
     );
+    console.log(`[ledger] publish queue=${this.queue} id=${transactionId}`);
   }
 
   async onModuleDestroy() {

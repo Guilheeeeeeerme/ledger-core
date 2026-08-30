@@ -48,7 +48,9 @@ export class LedgerService {
       .execute();
 
     if (Array.isArray(result.raw) && result.raw.length === 1) {
-      return mapTransaction(result.raw[0]);
+      const created = mapTransaction(result.raw[0]);
+      console.log(`[ledger] persist pending new id=${created.id}`);
+      return created;
     }
 
     const existing = await this.getTransaction(transfer.transactionId);
@@ -59,8 +61,10 @@ export class LedgerService {
       && existing.currency === transfer.currency;
 
     if (!samePayload) {
+      console.log(`[ledger] persist pending conflict id=${transfer.transactionId}`);
       throw new DomainError('TRANSACTION_CONFLICT', 'transactionId already has another payload', 409);
     }
+    console.log(`[ledger] persist pending existing id=${existing.id} status=${existing.status}`);
     return existing;
   }
 
@@ -70,13 +74,19 @@ export class LedgerService {
         where: { id: transactionId },
         lock: { mode: 'pessimistic_write' }
       });
+      console.log(`[ledger] processTransfer lock transaction id=${transactionId}`);
 
       if (!transaction) {
+        console.log(`[ledger] processTransfer fail code=TRANSACTION_NOT_FOUND id=${transactionId}`);
         throw new DomainError('TRANSACTION_NOT_FOUND', 'transaction not found', 404);
       }
-      if (transaction.status !== 'pending') return mapTransaction(transaction);
+      if (transaction.status !== 'pending') {
+        console.log(`[ledger] processTransfer skip not pending id=${transaction.id} status=${transaction.status}`);
+        return mapTransaction(transaction);
+      }
 
       const accountIds = [transaction.sourceAccountId, transaction.destinationAccountId].sort();
+      console.log(`[ledger] processTransfer lock accounts source=${transaction.sourceAccountId} dest=${transaction.destinationAccountId}`);
       const accounts = await manager
         .createQueryBuilder(Account, 'account')
         .where('account.id IN (:...ids)', { ids: accountIds })
@@ -85,6 +95,7 @@ export class LedgerService {
         .getMany();
 
       if (accounts.length !== 2) {
+        console.log(`[ledger] processTransfer fail code=ACCOUNT_NOT_FOUND id=${transaction.id}`);
         throw new DomainError('ACCOUNT_NOT_FOUND', 'source or destination account not found', 404);
       }
 
@@ -94,13 +105,16 @@ export class LedgerService {
       const amount = Number(transaction.amount);
 
       if (!source || !destination) {
+        console.log(`[ledger] processTransfer fail code=ACCOUNT_NOT_FOUND id=${transaction.id}`);
         throw new DomainError('ACCOUNT_NOT_FOUND', 'source or destination account not found', 404);
       }
       if (source.currency.trim() !== transaction.currency.trim()
         || destination.currency.trim() !== transaction.currency.trim()) {
+        console.log(`[ledger] processTransfer fail code=CURRENCY_MISMATCH id=${transaction.id}`);
         throw new DomainError('CURRENCY_MISMATCH', 'accounts must use the transaction currency', 409);
       }
       if (Number(source.balance) < amount) {
+        console.log(`[ledger] processTransfer fail code=INSUFFICIENT_FUNDS id=${transaction.id}`);
         throw new DomainError('INSUFFICIENT_FUNDS', 'source account has insufficient funds', 409);
       }
 
@@ -108,15 +122,18 @@ export class LedgerService {
         { transactionId: transaction.id, accountId: source.id, amount: String(-amount) },
         { transactionId: transaction.id, accountId: destination.id, amount: String(amount) }
       ]);
+      console.log(`[ledger] processTransfer write entries id=${transaction.id}`);
 
       source.balance = String(Number(source.balance) - amount);
       destination.balance = String(Number(destination.balance) + amount);
       await manager.save([source, destination]);
+      console.log(`[ledger] processTransfer balances updated id=${transaction.id}`);
 
       transaction.status = 'completed';
       transaction.errorCode = null;
       transaction.processedAt = new Date();
       await manager.save(transaction);
+      console.log(`[ledger] processTransfer completed id=${transaction.id}`);
       return mapTransaction(transaction);
     });
   }

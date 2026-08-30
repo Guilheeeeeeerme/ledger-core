@@ -13,7 +13,7 @@ async function waitFor<T>(name: string, operation: () => Promise<T>, attempts = 
       return await operation();
     } catch (error) {
       if (attempt === attempts) throw error;
-      console.log(`Waiting for ${name} (${attempt}/${attempts})...`);
+      console.log(`[ledger] waiting for ${name} (${attempt}/${attempts})`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
@@ -36,17 +36,20 @@ async function applySchema() {
 }
 
 async function bootstrap() {
+  const port = Number(process.env.PORT || 3000);
+  const stack = process.env.STACK_NAME || 'nestjs-typeorm-rabbitmq';
+  console.log(`[ledger] startup stack=${stack} port=${port}`);
   await applySchema();
+  console.log('[ledger] db ready');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.useGlobalFilters(new DomainExceptionFilter());
   app.useStaticAssets(join(__dirname, '..', 'public'));
   app.enableShutdownHooks();
-  const port = Number(process.env.PORT || 3000);
   await app.listen(port);
-  console.log(`Ledger listening on http://localhost:${port}`);
+  console.log(`[ledger] listening port=${port}`);
 }
 
 bootstrap().catch((error) => {
-  console.error('Startup failed:', error);
+  console.error(`[ledger] startup failed error=${(error as Error).message}`);
   process.exit(1);
 });
