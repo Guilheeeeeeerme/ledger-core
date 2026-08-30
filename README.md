@@ -1,6 +1,6 @@
 # Ledger Core
 
-Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through an HTTP API, RabbitMQ, a transactional consumer, and PostgreSQL.
+Ledger Core is a runnable double-entry ledger MVP that demonstrates the complete path of a financial transfer through a NestJS HTTP API, RabbitMQ, a transactional consumer, TypeORM, and PostgreSQL.
 
 It focuses on the failure modes that matter in financial systems: atomic balance changes, balanced entries, concurrent spending, duplicate message delivery, permanent domain failures, and transient infrastructure failures.
 
@@ -8,26 +8,29 @@ It focuses on the failure modes that matter in financial systems: atomic balance
 
 ```text
 Browser dashboard / HTTP client
-              │
-              ▼
-      Express HTTP API
-              │ persist transaction as pending
-              ▼
-         PostgreSQL ◄──────────────────────┐
-              │                            │ atomic commit
-              │ publish transaction ID     │
-              ▼                            │
-          RabbitMQ ──► Consumer ──► Ledger service
+              |
+              v
+      NestJS HTTP API
+              | persist transaction as pending
+              v
+         PostgreSQL (TypeORM) <-------------+
+              |                             | atomic commit
+              | publish transaction ID      |
+              v                             |
+          RabbitMQ --> Consumer --> Ledger service
 ```
 
-The API and consumer do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
+The API and consumer do not implement accounting rules themselves. Both delegate to `LedgerService`, which owns account locking (`pessimistic_write` / `FOR UPDATE`), currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
+
+Delivery uses `amqplib` competing consumers with manual ack after the database commit. Nest microservice `Transport.RMQ` is not used; that adapter is RPC-oriented and does not match this acknowledgement model.
 
 Stack variants, Compose project names, and parallel worktree isolation are documented in [docs/STACKS.md](docs/STACKS.md).
 
 ### Components
 
-- **Express API:** accepts transfers and exposes accounts, transaction status, history, and health.
-- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.raw`.
+- **NestJS API:** accepts transfers and exposes accounts, transaction status, history, and health.
+- **TypeORM:** maps accounts, transactions, and ledger entries; locks rows inside one database transaction.
+- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.typeorm`.
 - **Consumer:** maps successful commits to `ack`, permanent domain failures to `failed` plus `ack`, and transient failures to `nack` with requeue.
 - **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
 - **Dashboard:** provides a dependency-free way to submit and observe transfers.
@@ -73,6 +76,17 @@ Remove the stack and reset all seed balances:
 docker compose down -v
 ```
 
+Local Node process against shared infrastructure:
+
+```bash
+cp .env.parallel.example .env
+npm install
+npm run build
+npm start
+```
+
+That path listens on port `3002` and uses database `ledger_typeorm`.
+
 ## Demo flow
 
 1. Open the dashboard.
@@ -80,7 +94,7 @@ docker compose down -v
 3. Enter an amount and submit the transfer.
 4. Observe the transaction move from `pending` to `completed` or `failed`.
 5. Confirm both balances and the selected account history update.
-6. Open RabbitMQ Management and inspect the durable `ledger.transfers.raw` queue.
+6. Open RabbitMQ Management and inspect the durable `ledger.transfers.typeorm` queue.
 
 The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
@@ -97,7 +111,7 @@ GET /api/health
 Success response:
 
 ```json
-{ "status": "ok", "stack": "raw" }
+{ "status": "ok", "stack": "nestjs-typeorm-rabbitmq" }
 ```
 
 ### List accounts
@@ -207,7 +221,7 @@ The consumer performs these operations in one PostgreSQL transaction:
 
 1. Lock the transaction row.
 2. Return immediately if it is no longer `pending`.
-3. Lock both accounts in sorted UUID order.
+3. Lock both accounts in sorted UUID order with TypeORM `pessimistic_write`.
 4. Validate account existence, currency, and available funds.
 5. Insert equal and opposite ledger entries.
 6. Apply equal and opposite balance deltas.
@@ -239,13 +253,12 @@ npm install
 npm test
 ```
 
-The suite covers:
+The suite uses `node --test` after `nest build`. It covers:
 
 - transfer input normalization and validation;
 - deterministic account lock order;
 - balanced entry construction;
 - insufficient funds and rollback behavior;
-- database parameter types for balance deltas;
 - idempotent transaction processing;
 - API status codes and response contracts;
 - consumer `ack` and `nack` semantics;
@@ -258,16 +271,19 @@ For an integrated check, start Compose and submit the same `transactionId` twice
 ## Project structure
 
 ```text
-src/domain/validateTransfer.js  Input normalization and domain errors
-src/ledgerService.js           Accounting invariants and database operations
-src/broker.js                  RabbitMQ connection and durable publication
+src/main.ts                    Nest bootstrap, schema apply, static files
+src/app.module.ts              TypeORM, HTTP, broker, and consumer wiring
+src/http/ledger.controller.ts  HTTP contract
+src/ledger/ledger.service.ts   Accounting invariants and TypeORM operations
+src/broker/broker.service.ts   amqplib connection and durable publication
 src/consumer.js                Delivery handling and acknowledgement policy
-src/app.js                     Express routes and static dashboard delivery
-src/server.js                  Dependency composition and startup retries
+src/consumer.service.ts        Competing-consumer startup
+src/domain/validateTransfer.js Input normalization and domain errors
+src/entities/                  TypeORM mappings for the ledger tables
 src/schema.sql                 Constraints, indexes, and idempotent seed
 public/                        Framework-free dashboard
 test/                          Unit and HTTP contract tests
-test/helpers/httpApp.js        HTTP app factory used by API tests
+test/helpers/httpApp.js        Nest testing module factory for API tests
 stack.manifest.json            Current stack identity for isolation
 docker-compose.yml             Local application infrastructure
 docker-compose.infra.yml       Shared PostgreSQL, RabbitMQ, Redis, and Kafka
@@ -283,8 +299,8 @@ The container uses these environment variables:
 - `PORT`, default `3000`
 - `DATABASE_URL`, default `postgres://ledger:ledger@localhost:5432/ledger`
 - `RABBITMQ_URL`, default `amqp://ledger:ledger@localhost:5672`
-- `STACK_NAME`, default `raw`
-- `QUEUE_NAME`, default `ledger.transfers.raw`
+- `STACK_NAME`, default `nestjs-typeorm-rabbitmq`
+- `QUEUE_NAME`, default `ledger.transfers.typeorm`
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
 

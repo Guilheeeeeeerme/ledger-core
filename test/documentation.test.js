@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
-const ignoredDirectories = new Set(['.git', 'node_modules']);
-const textExtensions = new Set(['.js', '.json', '.md', '.sql', '.html', '.css', '.yml', '.yaml']);
+const ignoredDirectories = new Set(['.git', 'node_modules', 'dist']);
+const textExtensions = new Set(['.js', '.ts', '.json', '.md', '.sql', '.html', '.css', '.yml', '.yaml']);
 
 function textFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

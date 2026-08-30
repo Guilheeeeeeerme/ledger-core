@@ -1,5 +1,8 @@
-const { DomainError } = require('./domain/validateTransfer');
-const { QUEUE } = require('./broker');
+const QUEUE = process.env.QUEUE_NAME || 'ledger.transfers.typeorm';
+
+function isDomainError(error) {
+  return Boolean(error && error.name === 'DomainError' && error.code);
+}
 
 /**
  * Converts domain and infrastructure outcomes into explicit AMQP delivery
@@ -15,7 +18,7 @@ async function handleMessage(message, channel, ledgerService) {
     // Ack happens after processTransfer resolves, therefore after its DB commit.
     channel.ack(message);
   } catch (error) {
-    if (error instanceof DomainError) {
+    if (isDomainError(error)) {
       if (transactionId) await ledgerService.markFailed(transactionId, error.code);
       channel.ack(message);
       return;
