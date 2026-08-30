@@ -1,3 +1,5 @@
+name: ledger-core
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -35,6 +37,8 @@ services:
       PORT: 3000
       DATABASE_URL: postgres://ledger:ledger@postgres:5432/ledger
       RABBITMQ_URL: amqp://ledger:ledger@rabbitmq:5672
+      STACK_NAME: raw
+      QUEUE_NAME: ledger.transfers.raw
     ports:
       - "3000:3000"
     depends_on:

@@ -1,0 +1,9 @@
+{
+  "name": "raw",
+  "http": "express",
+  "orm": "pg",
+  "broker": "rabbitmq",
+  "composeName": "ledger-core",
+  "appHostPort": 3000,
+  "composeServices": ["app", "postgres", "rabbitmq"]
+}

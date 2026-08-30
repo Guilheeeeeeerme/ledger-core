@@ -22,10 +22,12 @@ Browser dashboard / HTTP client
 
 The API and consumer do not implement accounting rules themselves. Both delegate to `ledgerService`, which owns account locking, currency and balance validation, double-entry persistence, balance updates, and transaction status changes.
 
+Stack variants, Compose project names, and parallel worktree isolation are documented in [docs/STACKS.md](docs/STACKS.md).
+
 ### Components
 
 - **Express API:** accepts transfers and exposes accounts, transaction status, history, and health.
-- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers`.
+- **RabbitMQ:** provides durable asynchronous delivery through `ledger.transfers.raw`.
 - **Consumer:** maps successful commits to `ack`, permanent domain failures to `failed` plus `ack`, and transient failures to `nack` with requeue.
 - **PostgreSQL:** stores accounts, transactions, and immutable ledger entries.
 - **Dashboard:** provides a dependency-free way to submit and observe transfers.
@@ -78,7 +80,7 @@ docker compose down -v
 3. Enter an amount and submit the transfer.
 4. Observe the transaction move from `pending` to `completed` or `failed`.
 5. Confirm both balances and the selected account history update.
-6. Open RabbitMQ Management and inspect the durable `ledger.transfers` queue.
+6. Open RabbitMQ Management and inspect the durable `ledger.transfers.raw` queue.
 
 The dashboard polls transaction status every 500 ms for up to 10 seconds. This keeps the MVP small; a production UI could use server-sent events or WebSockets.
 
@@ -95,7 +97,7 @@ GET /api/health
 Success response:
 
 ```json
-{ "status": "ok" }
+{ "status": "ok", "stack": "raw" }
 ```
 
 ### List accounts
@@ -265,8 +267,13 @@ src/server.js                  Dependency composition and startup retries
 src/schema.sql                 Constraints, indexes, and idempotent seed
 public/                        Framework-free dashboard
 test/                          Unit and HTTP contract tests
-docs/PRD.md                    Product requirements and acceptance criteria
+test/helpers/httpApp.js        HTTP app factory used by API tests
+stack.manifest.json            Current stack identity for isolation
 docker-compose.yml             Local application infrastructure
+docker-compose.infra.yml       Shared PostgreSQL, RabbitMQ, Redis, and Kafka
+docs/PRD.md                    Product requirements and acceptance criteria
+docs/STACKS.md                 Parallel worktree and stack-variant notes
+scripts/                       Smoke checks for one stack or all ports
 ```
 
 ## Configuration
@@ -276,6 +283,8 @@ The container uses these environment variables:
 - `PORT`, default `3000`
 - `DATABASE_URL`, default `postgres://ledger:ledger@localhost:5432/ledger`
 - `RABBITMQ_URL`, default `amqp://ledger:ledger@localhost:5672`
+- `STACK_NAME`, default `raw`
+- `QUEUE_NAME`, default `ledger.transfers.raw`
 
 Compose supplies service-network URLs automatically. Credentials are intentionally simple because this configuration is for local demonstration only.
 

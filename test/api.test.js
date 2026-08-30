@@ -2,7 +2,7 @@ const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { createApp } = require('../src/app');
+const { createHttpApp } = require('./helpers/httpApp');
 const { validateTransfer } = require('../src/domain/validateTransfer');
 
 describe('ledger API', () => {
@@ -27,11 +27,17 @@ describe('ledger API', () => {
   };
 
   before(async () => {
-    app = createApp({
+    app = createHttpApp({
       ledgerService: service,
       publishTransfer: async (id) => published.push(id),
       healthCheck: async () => true
     });
+  });
+
+  it('reports health with the configured stack name', async () => {
+    const response = await request(app).get('/api/health');
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, { status: 'ok', stack: process.env.STACK_NAME || 'raw' });
   });
 
   it('accepts and publishes a valid transfer', async () => {
