@@ -21,7 +21,11 @@ function createLedgerService({ Account, Transaction, LedgerEntry, withTransactio
       }
     });
 
-    if (created) return mapTransaction(row);
+    if (created) {
+      const mapped = mapTransaction(row);
+      console.log(`[ledger] persist pending new id=${mapped.id}`);
+      return mapped;
+    }
 
     const existing = mapTransaction(row);
     const samePayload = existing.sourceAccountId === transfer.sourceAccountId
@@ -30,8 +34,10 @@ function createLedgerService({ Account, Transaction, LedgerEntry, withTransactio
       && existing.currency === transfer.currency;
 
     if (!samePayload) {
+      console.log(`[ledger] persist pending conflict id=${transfer.transactionId}`);
       throw new DomainError('TRANSACTION_CONFLICT', 'transactionId already has another payload', 409);
     }
+    console.log(`[ledger] persist pending existing id=${existing.id} status=${existing.status}`);
     return existing;
   }
 
@@ -45,13 +51,21 @@ function createLedgerService({ Account, Transaction, LedgerEntry, withTransactio
         transaction: t,
         lock: t.LOCK.UPDATE
       });
+      console.log(`[ledger] processTransfer lock transaction id=${transactionId}`);
 
-      if (!transaction) throw new DomainError('TRANSACTION_NOT_FOUND', 'transaction not found', 404);
+      if (!transaction) {
+        console.log(`[ledger] processTransfer fail code=TRANSACTION_NOT_FOUND id=${transactionId}`);
+        throw new DomainError('TRANSACTION_NOT_FOUND', 'transaction not found', 404);
+      }
       // A redelivered broker message becomes a no-op after the first commit.
-      if (transaction.status !== 'pending') return mapTransaction(transaction);
+      if (transaction.status !== 'pending') {
+        console.log(`[ledger] processTransfer skip not pending id=${transaction.id} status=${transaction.status}`);
+        return mapTransaction(transaction);
+      }
 
       // Stable lock ordering prevents opposite transfers from deadlocking each other.
       const accountIds = [transaction.sourceAccountId, transaction.destinationAccountId].sort();
+      console.log(`[ledger] processTransfer lock accounts source=${transaction.sourceAccountId} dest=${transaction.destinationAccountId}`);
       const accountRows = await Account.findAll({
         where: { id: { [Op.in]: accountIds } },
         order: [['id', 'ASC']],
@@ -60,6 +74,7 @@ function createLedgerService({ Account, Transaction, LedgerEntry, withTransactio
       });
 
       if (accountRows.length !== 2) {
+        console.log(`[ledger] processTransfer fail code=ACCOUNT_NOT_FOUND id=${transaction.id}`);
         throw new DomainError('ACCOUNT_NOT_FOUND', 'source or destination account not found', 404);
       }
 
@@ -70,9 +85,11 @@ function createLedgerService({ Account, Transaction, LedgerEntry, withTransactio
 
       if (source.currency.trim() !== transaction.currency.trim()
         || destination.currency.trim() !== transaction.currency.trim()) {
+        console.log(`[ledger] processTransfer fail code=CURRENCY_MISMATCH id=${transaction.id}`);
         throw new DomainError('CURRENCY_MISMATCH', 'accounts must use the transaction currency', 409);
       }
       if (Number(source.balance) < amount) {
+        console.log(`[ledger] processTransfer fail code=INSUFFICIENT_FUNDS id=${transaction.id}`);
         throw new DomainError('INSUFFICIENT_FUNDS', 'source account has insufficient funds', 409);
       }
 
@@ -81,15 +98,18 @@ function createLedgerService({ Account, Transaction, LedgerEntry, withTransactio
         { transactionId: transaction.id, accountId: source.id, amount: -amount },
         { transactionId: transaction.id, accountId: destination.id, amount }
       ], { transaction: t });
+      console.log(`[ledger] processTransfer write entries id=${transaction.id}`);
 
       await source.decrement('balance', { by: amount, transaction: t });
       await destination.increment('balance', { by: amount, transaction: t });
+      console.log(`[ledger] processTransfer balances updated id=${transaction.id}`);
 
       await transaction.update({
         status: 'completed',
         processedAt: new Date(),
         errorCode: null
       }, { transaction: t });
+      console.log(`[ledger] processTransfer completed id=${transaction.id}`);
 
       return mapTransaction(transaction);
     });
