@@ -1,6 +1,6 @@
 const amqp = require('amqplib');
 
-const QUEUE = process.env.QUEUE_NAME || 'ledger.transfers.raw';
+const QUEUE = process.env.QUEUE_NAME || 'ledger.transfers.express_prisma';
 let connection;
 let channel;
 

@@ -1,9 +1,9 @@
 {
-  "name": "raw",
+  "name": "express-prisma-rabbitmq",
   "http": "express",
-  "orm": "pg",
+  "orm": "prisma",
   "broker": "rabbitmq",
-  "composeName": "ledger-core",
-  "appHostPort": 3000,
+  "composeName": "ledger-core-express-prisma-rabbitmq",
+  "appHostPort": 3004,
   "composeServices": ["app", "postgres", "rabbitmq"]
 }

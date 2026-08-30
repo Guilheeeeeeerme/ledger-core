@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Matches src/schema.sql. Seed accounts (also applied by schema.sql and prisma/seed.js):
+// aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa Alice Account 100000 BRL
+// bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb Bob Account 50000 BRL
+
+model Account {
+  id        String   @id @db.Uuid
+  name      String
+  currency  String   @db.Char(3)
+  balance   BigInt
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  outgoingTransactions Transaction[] @relation("SourceAccount")
+  incomingTransactions Transaction[] @relation("DestinationAccount")
+  ledgerEntries        LedgerEntry[]
+
+  @@map("accounts")
+}
+
+model Transaction {
+  id                   String    @id @db.Uuid
+  sourceAccountId      String    @map("source_account_id") @db.Uuid
+  destinationAccountId String    @map("destination_account_id") @db.Uuid
+  amount               BigInt
+  currency             String    @db.Char(3)
+  description          String    @default("")
+  status               String
+  errorCode            String?   @map("error_code")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt          DateTime? @map("processed_at") @db.Timestamptz(6)
+
+  sourceAccount      Account       @relation("SourceAccount", fields: [sourceAccountId], references: [id])
+  destinationAccount Account       @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
+  ledgerEntries      LedgerEntry[]
+
+  @@map("transactions")
+}
+
+model LedgerEntry {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  transactionId String   @map("transaction_id") @db.Uuid
+  accountId     String   @map("account_id") @db.Uuid
+  amount        BigInt
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  account     Account     @relation(fields: [accountId], references: [id])
+
+  @@unique([transactionId, accountId])
+  @@index([accountId, createdAt(sort: Desc)], map: "idx_entries_account_created")
+  @@map("ledger_entries")
+}
