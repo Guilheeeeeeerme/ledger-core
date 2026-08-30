@@ -26,6 +26,7 @@ function createBroker(ledgerService: LedgerService) {
 
   async function publishTransfer(transactionId: string) {
     await queue.add('transfer', { transactionId });
+    console.log(`[ledger] publish queue=${QUEUE} job=transfer id=${transactionId}`);
   }
 
   async function startWorker() {
@@ -36,6 +37,8 @@ function createBroker(ledgerService: LedgerService) {
     );
     await queue.waitUntilReady();
     await worker.waitUntilReady();
+    console.log('[ledger] broker ready');
+    console.log(`[ledger] consumer started queue=${QUEUE}`);
   }
 
   async function closeBroker() {

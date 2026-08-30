@@ -12,7 +12,7 @@ async function waitFor<T>(name: string, operation: () => Promise<T>, attempts = 
       return await operation();
     } catch (error) {
       if (attempt === attempts) throw error;
-      console.log(`Waiting for ${name} (${attempt}/${attempts})...`);
+      console.log(`[ledger] waiting for ${name} (${attempt}/${attempts})`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
@@ -30,11 +30,15 @@ async function applySchema(prisma: PrismaClient, sql: string) {
 }
 
 async function start() {
+  const port = Number(process.env.PORT || 3000);
+  const stack = process.env.STACK_NAME || 'nestjs-prisma-bullmq';
+  console.log(`[ledger] startup stack=${stack} port=${port}`);
   const prisma = new PrismaClient();
   const schema = await readFile(join(process.cwd(), 'src', 'schema.sql'), 'utf8');
   await waitFor('PostgreSQL', async () => {
     await applySchema(prisma, schema);
   });
+  console.log('[ledger] db ready');
 
   const ledgerService = createLedgerService(prisma);
   const { publishTransfer, startWorker, closeBroker } = createBroker(ledgerService);
@@ -45,8 +49,7 @@ async function start() {
     publishTransfer,
     healthCheck: () => prisma.$queryRaw`SELECT 1`
   });
-  const port = Number(process.env.PORT || 3000);
-  const server = app.listen(port, () => console.log(`Ledger listening on http://localhost:${port}`));
+  const server = app.listen(port, () => console.log(`[ledger] listening port=${port}`));
 
   async function shutdown() {
     server.close();
@@ -58,6 +61,6 @@ async function start() {
 }
 
 start().catch((error) => {
-  console.error('Startup failed:', error);
+  console.error(`[ledger] startup failed error=${(error as Error).message}`);
   process.exit(1);
 });

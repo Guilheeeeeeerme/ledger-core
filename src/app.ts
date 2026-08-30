@@ -34,13 +34,23 @@ type AppDeps = {
 @Catch()
 class DomainExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
-    const response = host.switchToHttp().getResponse<express.Response>();
-    if (exception instanceof DomainError) {
-      return response.status(exception.status).json({
-        error: { code: exception.code, message: exception.message }
+    const http = host.switchToHttp();
+    const response = http.getResponse<express.Response>();
+    const request = http.getRequest<express.Request>();
+    const isDomain = exception instanceof DomainError
+      || Boolean(exception && typeof exception === 'object' && (exception as DomainError).name === 'DomainError' && (exception as DomainError).code);
+    if (isDomain) {
+      const domain = exception as DomainError;
+      const path = request.path || request.url || '';
+      if (request.method === 'POST' && String(path).includes('api/transactions')) {
+        console.log(`[ledger] POST /api/transactions rejected code=${domain.code} id=${(request.body as { transactionId?: string })?.transactionId || '-'}`);
+      }
+      return response.status(domain.status).json({
+        error: { code: domain.code, message: domain.message }
       });
     }
-    console.error(exception);
+    const err = exception as { message?: string };
+    console.error(`[ledger] internal error message=${err?.message || 'unknown'}`);
     return response.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' }
     });
@@ -89,6 +99,7 @@ class LedgerController {
     };
     const transaction = await this.ledgerService.createPendingTransfer(input);
     if (transaction.status === 'pending') await this.publishTransfer(transaction.id as string);
+    console.log(`[ledger] POST /api/transactions accepted id=${transaction.id}`);
     return transaction;
   }
 }
