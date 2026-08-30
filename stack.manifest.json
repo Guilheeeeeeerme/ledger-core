@@ -1,9 +1,9 @@
 {
-  "name": "raw",
-  "http": "express",
-  "orm": "pg",
-  "broker": "rabbitmq",
-  "composeName": "ledger-core",
-  "appHostPort": 3000,
-  "composeServices": ["app", "postgres", "rabbitmq"]
+  "name": "nestjs-prisma-kafka",
+  "http": "nestjs",
+  "orm": "prisma",
+  "broker": "kafka",
+  "composeName": "ledger-core-nestjs-prisma-kafka",
+  "appHostPort": 3005,
+  "composeServices": ["app", "postgres", "kafka"]
 }

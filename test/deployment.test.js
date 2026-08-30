@@ -13,16 +13,17 @@ describe('deployment contract', () => {
     for (const service of manifest.composeServices) {
       assert.match(compose, new RegExp(`${service}:`));
     }
-    assert.match(compose, /3000:3000/);
-    assert.match(compose, /15672:15672/);
+    assert.match(compose, /3005:3005/);
+    assert.match(compose, /9092:9092/);
     assert.match(compose, /build:[\s\S]*?context: \.[\s\S]*?network: host/);
     assert.equal((compose.match(/healthcheck:/g) || []).length, manifest.composeServices.length);
+    assert.doesNotMatch(compose, /rabbitmq/);
   });
 
   it('documents startup and both observable URLs', () => {
     const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
     assert.match(readme, /docker compose up --build/);
-    assert.match(readme, /http:\/\/localhost:3000/);
-    assert.match(readme, /http:\/\/localhost:15672/);
+    assert.match(readme, /http:\/\/localhost:3005/);
+    assert.match(readme, /localhost:9092/);
   });
 });

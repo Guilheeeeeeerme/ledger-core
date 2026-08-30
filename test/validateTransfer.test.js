@@ -1,7 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validateTransfer, DomainError } = require('../src/domain/validateTransfer');
+const { validateTransfer, DomainError } = require('../dist/domain/validateTransfer');
 
 const validTransfer = {
   transactionId: '11111111-1111-4111-8111-111111111111',
