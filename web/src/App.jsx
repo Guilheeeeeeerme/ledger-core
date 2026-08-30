@@ -1,12 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'BRL' });
+const POLL_MS = 500;
 
 async function api(path, options) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error?.message || 'Request failed');
   return body;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export default function App() {
@@ -19,7 +24,9 @@ export default function App() {
   const [historyAccountId, setHistoryAccountId] = useState('');
   const [history, setHistory] = useState([]);
   const [feedback, setFeedback] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [transfers, setTransfers] = useState([]);
+  const pollStopsRef = useRef(new Map());
 
   async function loadAccounts() {
     const { accounts: next } = await api('/api/accounts');
@@ -45,6 +52,66 @@ export default function App() {
     await loadHistory(accountId);
   }
 
+  function upsertTransfer(id, patch) {
+    setTransfers((current) => {
+      const index = current.findIndex((item) => item.id === id);
+      if (index === -1) {
+        return [{ id, status: 'pending', errorCode: null, ...patch }, ...current];
+      }
+      const next = current.slice();
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  }
+
+  function stopPolling(id) {
+    const stop = pollStopsRef.current.get(id);
+    if (stop) {
+      stop();
+      pollStopsRef.current.delete(id);
+    }
+  }
+
+  function startPolling(id) {
+    if (pollStopsRef.current.has(id)) return;
+
+    let cancelled = false;
+    pollStopsRef.current.set(id, () => {
+      cancelled = true;
+    });
+
+    (async () => {
+      while (!cancelled) {
+        try {
+          const transaction = await api(`/api/transactions/${id}`);
+          if (cancelled) return;
+          upsertTransfer(id, {
+            status: transaction.status,
+            errorCode: transaction.errorCode || null,
+            amount: transaction.amount,
+            currency: transaction.currency,
+            description: transaction.description
+          });
+          if (transaction.status !== 'pending') {
+            stopPolling(id);
+            try {
+              await refresh();
+            } catch (error) {
+              setFeedback(error.message);
+            }
+            return;
+          }
+        } catch (error) {
+          if (cancelled) return;
+          upsertTransfer(id, { status: 'failed', errorCode: error.message || 'POLL_FAILED' });
+          stopPolling(id);
+          return;
+        }
+        await sleep(POLL_MS);
+      }
+    })();
+  }
+
   useEffect(() => {
     let cancelled = false;
     async function boot() {
@@ -63,46 +130,52 @@ export default function App() {
     boot();
     return () => {
       cancelled = true;
+      for (const stop of pollStopsRef.current.values()) stop();
+      pollStopsRef.current.clear();
     };
   }, []);
 
-  async function pollTransaction(id) {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const transaction = await api(`/api/transactions/${id}`);
-      const suffix = transaction.errorCode ? ` · ${transaction.errorCode}` : '';
-      setFeedback(`${transaction.id} · ${transaction.status}${suffix}`);
-      if (transaction.status !== 'pending') {
-        await refresh();
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    setFeedback(`${id} · still pending`);
-  }
-
   async function onSubmit(event) {
     event.preventDefault();
-    setBusy(true);
-    setFeedback('submitting');
+    setSubmitting(true);
+    setFeedback('');
     try {
+      const cents = Math.round(Number(amount) * 100);
       const transaction = await api('/api/transactions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           sourceAccountId,
           destinationAccountId,
-          amount: Math.round(Number(amount) * 100),
+          amount: cents,
           currency: 'BRL',
           description
         })
       });
-      await pollTransaction(transaction.id);
+      upsertTransfer(transaction.id, {
+        status: transaction.status || 'pending',
+        errorCode: transaction.errorCode || null,
+        amount: transaction.amount ?? cents,
+        currency: transaction.currency || 'BRL',
+        description: transaction.description ?? description,
+        sourceAccountId,
+        destinationAccountId,
+        submittedAt: Date.now()
+      });
+      if ((transaction.status || 'pending') === 'pending') {
+        startPolling(transaction.id);
+      } else {
+        await refresh();
+      }
     } catch (error) {
       setFeedback(error.message);
     } finally {
-      setBusy(false);
+      setSubmitting(false);
     }
   }
+
+  const inFlight = transfers.filter((item) => item.status === 'pending');
+  const finished = transfers.filter((item) => item.status !== 'pending');
 
   return (
     <main>
@@ -174,9 +247,60 @@ export default function App() {
               onChange={(event) => setDescription(event.target.value)}
             />
           </label>
-          <button type="submit" disabled={busy}>Submit transfer</button>
+          <button type="submit" disabled={submitting}>
+            {submitting ? 'Submitting…' : 'Submit transfer'}
+          </button>
         </form>
-        {feedback ? <p>{feedback}</p> : null}
+        {feedback ? <p className="feedback">{feedback}</p> : null}
+        <p className="hint">POST returns 202 pending. Submit again while transfers process.</p>
+      </section>
+
+      <section>
+        <h2>Submitted transfers</h2>
+        {transfers.length === 0 ? (
+          <p>No transfers submitted yet.</p>
+        ) : (
+          <>
+            {inFlight.length > 0 ? (
+              <div className="tx-group">
+                <h3>In flight ({inFlight.length})</h3>
+                <ul className="tx-list">
+                  {inFlight.map((item) => (
+                    <li key={item.id} className="tx-card status-pending">
+                      <div className="tx-row">
+                        <strong>{item.status}</strong>
+                        <span>{money.format((item.amount || 0) / 100)}</span>
+                      </div>
+                      <small>{item.id}</small>
+                      {item.description ? <p>{item.description}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {finished.length > 0 ? (
+              <div className="tx-group">
+                <h3>Finished ({finished.length})</h3>
+                <ul className="tx-list">
+                  {finished.map((item) => (
+                    <li
+                      key={item.id}
+                      className={`tx-card status-${item.status === 'completed' ? 'completed' : 'failed'}`}
+                    >
+                      <div className="tx-row">
+                        <strong>{item.status}</strong>
+                        <span>{money.format((item.amount || 0) / 100)}</span>
+                      </div>
+                      <small>{item.id}</small>
+                      {item.description ? <p>{item.description}</p> : null}
+                      {item.errorCode ? <p className="error-code">errorCode: {item.errorCode}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </>
+        )}
       </section>
 
       <section>
